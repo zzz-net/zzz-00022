@@ -13,6 +13,7 @@ from .models import (
     PreCheckReport,
     PreviewReport,
     RoomRow,
+    SignoffReport,
 )
 
 
@@ -24,6 +25,8 @@ ROLLBACK_REPORT_FILE = "rollback_report.json"
 EVENTS_LOG_FILE = "events.log"
 PREVIEWS_DIR = "previews"
 PREVIEW_INDEX_FILE = "previews_index.json"
+SIGNOFFS_DIR = "signoffs"
+SIGNOFF_INDEX_FILE = "signoffs_index.json"
 
 
 def gen_batch_id() -> str:
@@ -34,6 +37,11 @@ def gen_batch_id() -> str:
 def gen_preview_id() -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"preview-{ts}-{uuid.uuid4().hex[:6]}"
+
+
+def gen_signoff_id() -> str:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"signoff-{ts}-{uuid.uuid4().hex[:6]}"
 
 
 class BatchState:
@@ -207,6 +215,81 @@ class BatchState:
             return {}
         return json.loads(idx_path.read_text(encoding="utf-8"))
 
+    def save_signoff_report(self, report: SignoffReport) -> Path:
+        signoffs_dir = self.batch_dir / SIGNOFFS_DIR
+        signoffs_dir.mkdir(parents=True, exist_ok=True)
+        target = signoffs_dir / f"{report.signoff_id}.json"
+        target.write_text(
+            json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._update_signoff_index(report)
+        self._log_event(
+            f"保存签收报告: {report.signoff_id}, "
+            f"passed={report.passed}, "
+            f"signed={report.signed_rooms}, "
+            f"abnormal={report.abnormal_count}"
+        )
+        self.save()
+        return target
+
+    def list_signoff_ids(self) -> list[str]:
+        signoffs_dir = self.batch_dir / SIGNOFFS_DIR
+        if not signoffs_dir.exists():
+            return []
+        files = sorted(
+            signoffs_dir.glob("signoff-*.json"),
+            key=lambda p: (p.stat().st_mtime, p.name),
+        )
+        return [p.stem for p in files]
+
+    def load_signoff_report(self, signoff_id: str) -> Optional[SignoffReport]:
+        p = self.batch_dir / SIGNOFFS_DIR / f"{signoff_id}.json"
+        if not p.exists():
+            return None
+        return SignoffReport.model_validate_json(p.read_text(encoding="utf-8"))
+
+    def load_all_signoff_reports(self) -> list[SignoffReport]:
+        reports = []
+        for sid in self.list_signoff_ids():
+            rpt = self.load_signoff_report(sid)
+            if rpt:
+                reports.append(rpt)
+        return reports
+
+    def load_latest_signoff_report(self) -> Optional[SignoffReport]:
+        ids = self.list_signoff_ids()
+        if not ids:
+            return None
+        return self.load_signoff_report(ids[-1])
+
+    def _update_signoff_index(self, report: SignoffReport):
+        idx_path = self.batch_dir / SIGNOFFS_DIR / SIGNOFF_INDEX_FILE
+        if idx_path.exists():
+            data = json.loads(idx_path.read_text(encoding="utf-8"))
+        else:
+            data = {}
+        data[report.signoff_id] = {
+            "signoff_id": report.signoff_id,
+            "imported_at": report.imported_at,
+            "passed": report.passed,
+            "total_rows": report.total_rows,
+            "valid_rows": report.valid_rows,
+            "signed_rooms": report.signed_rooms,
+            "abnormal_count": report.abnormal_count,
+            "csv_path": report.csv_path,
+        }
+        idx_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_signoff_index(self) -> dict:
+        idx_path = self.batch_dir / SIGNOFFS_DIR / SIGNOFF_INDEX_FILE
+        if not idx_path.exists():
+            return {}
+        return json.loads(idx_path.read_text(encoding="utf-8"))
+
     def _log_event(self, message: str):
         ts = datetime.now().isoformat()
         line = f"[{ts}] [{self.batch_id}] {message}\n"
@@ -323,4 +406,15 @@ class Storage:
                 entry.update(meta)
                 results.append(entry)
         results.sort(key=lambda x: x.get("previewed_at", ""), reverse=True)
+        return results
+
+    def list_all_signoffs(self) -> list[dict]:
+        results = []
+        for batch in self.list_batches():
+            idx = batch.load_signoff_index()
+            for sid, meta in idx.items():
+                entry = {"batch_id": batch.batch_id}
+                entry.update(meta)
+                results.append(entry)
+        results.sort(key=lambda x: x.get("imported_at", ""), reverse=True)
         return results

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from .signoff import build_signoff_summary
 from .storage import BatchState, Storage
 
 
@@ -83,6 +84,9 @@ def query_batch(storage: Storage, batch_id: str) -> Optional[dict]:
             "results": rollback.get("results", []),
         }
 
+    signoff_summary = build_signoff_summary(batch)
+    result["signoff"] = signoff_summary
+
     return result
 
 
@@ -97,6 +101,12 @@ def list_batches(storage: Storage, status_filter: Optional[str] = None) -> list[
         d["preview_count"] = len(preview_ids)
         if preview_ids:
             d["latest_preview_at"] = preview_ids[-1]
+        signoff_summary = build_signoff_summary(b)
+        d["signoff_count"] = signoff_summary.get("count", 0)
+        d["signoff_status"] = signoff_summary.get("status", "none")
+        d["signoff_signed_rooms"] = signoff_summary.get("signed_rooms", 0)
+        d["signoff_abnormal_count"] = signoff_summary.get("abnormal_count", 0)
+        d["signoff_last_imported_at"] = signoff_summary.get("last_imported_at", "")
         result.append(d)
     return result
 
@@ -135,6 +145,8 @@ def export_batches_csv(
         "batch_id", "status", "created_at", "updated_at",
         "csv_path", "total_items", "success_count", "fail_count", "notes",
         "preview_count", "latest_preview_id",
+        "signoff_count", "signoff_status", "signoff_signed_rooms",
+        "signoff_abnormal_count", "signoff_last_imported_at",
     ]
     with out.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -144,6 +156,12 @@ def export_batches_csv(
             preview_ids = b.list_preview_ids()
             row["preview_count"] = len(preview_ids)
             row["latest_preview_id"] = preview_ids[-1] if preview_ids else ""
+            signoff_summary = build_signoff_summary(b)
+            row["signoff_count"] = signoff_summary.get("count", 0)
+            row["signoff_status"] = signoff_summary.get("status", "none")
+            row["signoff_signed_rooms"] = signoff_summary.get("signed_rooms", 0)
+            row["signoff_abnormal_count"] = signoff_summary.get("abnormal_count", 0)
+            row["signoff_last_imported_at"] = signoff_summary.get("last_imported_at", "")
             writer.writerow(row)
     return out
 
@@ -163,16 +181,28 @@ def export_items_csv(
     dispatch = batch.load_dispatch_report() or {}
     items = dispatch.get("items", [])
 
+    latest_signoff = batch.load_latest_signoff_report()
+    signoff_map: dict[tuple[str, str, str], dict] = {}
+    if latest_signoff:
+        for si in latest_signoff.signoff_items:
+            key = (si["exam_id"], si["room_id"], si["subject"])
+            signoff_map[key] = si
+
     fieldnames = [
         "target_name", "exam_id", "room_id", "subject",
         "students_count", "source_path", "target_path",
         "dispatched", "source_sha256", "target_sha256", "error",
+        "signed_off", "signoff_person", "signoff_time",
+        "received_count", "damage_note", "signoff_remark",
+        "signoff_abnormal",
     ]
     with out.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for it in items:
             rr = it.get("room_row", {})
+            key = (rr.get("exam_id", ""), rr.get("room_id", ""), rr.get("subject", ""))
+            si = signoff_map.get(key, {})
             writer.writerow({
                 "target_name": rr.get("target_name", ""),
                 "exam_id": rr.get("exam_id", ""),
@@ -185,5 +215,12 @@ def export_items_csv(
                 "source_sha256": it.get("source_sha256", ""),
                 "target_sha256": it.get("target_sha256", ""),
                 "error": it.get("error", ""),
+                "signed_off": "True" if si else "False",
+                "signoff_person": si.get("signoff_person", ""),
+                "signoff_time": si.get("signoff_time", ""),
+                "received_count": si.get("received_count", ""),
+                "damage_note": si.get("damage_note", ""),
+                "signoff_remark": si.get("remark", ""),
+                "signoff_abnormal": si.get("is_abnormal", ""),
             })
     return out

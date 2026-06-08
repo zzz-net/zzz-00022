@@ -1,0 +1,29 @@
+{
+  "signoff_id": "signoff-20260608-170850-20596a",
+  "batch_id": "batch-20260608-170845-f474bd",
+  "csv_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_update.csv",
+  "total_rows": 1,
+  "valid_rows": 1,
+  "invalid_rooms": [],
+  "count_mismatches": [],
+  "conflicts": [],
+  "signoff_items": [
+    {
+      "exam_id": "20260608",
+      "room_id": "A101",
+      "subject": "math",
+      "signoff_person": "赵六",
+      "signoff_time": "2026-06-08 11:00:00",
+      "received_count": 30,
+      "expected_count": 30,
+      "damage_note": "",
+      "remark": "改派签收人",
+      "line_no": 2,
+      "is_abnormal": false
+    }
+  ],
+  "signed_rooms": 1,
+  "abnormal_count": 0,
+  "passed": true,
+  "imported_at": "2026-06-08T17:08:50.156412"
+}

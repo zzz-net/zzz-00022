@@ -1,0 +1,55 @@
+{
+  "signoff_id": "signoff-20260608-170846-174527",
+  "batch_id": "batch-20260608-170845-f474bd",
+  "csv_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_ok.csv",
+  "total_rows": 3,
+  "valid_rows": 3,
+  "invalid_rooms": [],
+  "count_mismatches": [],
+  "conflicts": [],
+  "signoff_items": [
+    {
+      "exam_id": "20260608",
+      "room_id": "A101",
+      "subject": "math",
+      "signoff_person": "张三",
+      "signoff_time": "2026-06-08 09:00:00",
+      "received_count": 30,
+      "expected_count": 30,
+      "damage_note": "",
+      "remark": "首轮签收",
+      "line_no": 2,
+      "is_abnormal": false
+    },
+    {
+      "exam_id": "20260608",
+      "room_id": "A102",
+      "subject": "math",
+      "signoff_person": "李四",
+      "signoff_time": "2026-06-08 09:05:00",
+      "received_count": 28,
+      "expected_count": 28,
+      "damage_note": "封面轻微破损",
+      "remark": "",
+      "line_no": 3,
+      "is_abnormal": true
+    },
+    {
+      "exam_id": "20260608",
+      "room_id": "B201",
+      "subject": "english",
+      "signoff_person": "王五",
+      "signoff_time": "2026-06-08 09:10:00",
+      "received_count": 35,
+      "expected_count": 35,
+      "damage_note": "",
+      "remark": "正常签收",
+      "line_no": 4,
+      "is_abnormal": false
+    }
+  ],
+  "signed_rooms": 3,
+  "abnormal_count": 1,
+  "passed": true,
+  "imported_at": "2026-06-08T17:08:46.242085"
+}

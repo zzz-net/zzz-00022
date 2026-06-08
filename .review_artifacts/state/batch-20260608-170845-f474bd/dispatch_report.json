@@ -1,0 +1,57 @@
+{
+  "batch_id": "batch-20260608-170845-f474bd",
+  "saved_at": "2026-06-08T17:08:45.687423",
+  "items": [
+    {
+      "room_row": {
+        "exam_id": "20260608",
+        "room_id": "A101",
+        "subject": "math",
+        "students_count": 30,
+        "source_file": "paper_math_v1.pdf",
+        "target_name": "20260608_A101_math",
+        "line_no": 2
+      },
+      "source_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\papers\\paper_math_v1.pdf",
+      "target_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\output\\20260608_A101_math.zip",
+      "source_sha256": "7b75338a36a99f71434b3eb0c8d18469da1a3067ae81f039323e50f54dcfa7e1",
+      "target_sha256": "fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0",
+      "dispatched": true,
+      "error": null
+    },
+    {
+      "room_row": {
+        "exam_id": "20260608",
+        "room_id": "A102",
+        "subject": "math",
+        "students_count": 28,
+        "source_file": "paper_math_v1.pdf",
+        "target_name": "20260608_A102_math",
+        "line_no": 3
+      },
+      "source_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\papers\\paper_math_v1.pdf",
+      "target_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\output\\20260608_A102_math.zip",
+      "source_sha256": "7b75338a36a99f71434b3eb0c8d18469da1a3067ae81f039323e50f54dcfa7e1",
+      "target_sha256": "fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0",
+      "dispatched": true,
+      "error": null
+    },
+    {
+      "room_row": {
+        "exam_id": "20260608",
+        "room_id": "B201",
+        "subject": "english",
+        "students_count": 35,
+        "source_file": "paper_english_v2.pdf",
+        "target_name": "20260608_B201_english",
+        "line_no": 4
+      },
+      "source_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\papers\\paper_english_v2.pdf",
+      "target_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\output\\20260608_B201_english.zip",
+      "source_sha256": "d12e52dfceb1f1c2b0434028b82577f02564c5f84456819c9d9977d1b2a43614",
+      "target_sha256": "6255d50be7ae4a1b98623890f0c5e4c8d9862e054a9337c786721428469351f8",
+      "dispatched": true,
+      "error": null
+    }
+  ]
+}

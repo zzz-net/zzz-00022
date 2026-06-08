@@ -14,12 +14,15 @@ from .models import (
     ExitCode,
     compute_sha256,
 )
+from .signoff import build_signoff_summary
 from .storage import (
     CONFIG_SNAPSHOT_FILE,
     DISPATCH_REPORT_FILE,
     EVENTS_LOG_FILE,
     PRECHECK_REPORT_FILE,
     ROLLBACK_REPORT_FILE,
+    SIGNOFF_INDEX_FILE,
+    SIGNOFFS_DIR,
     BatchState,
     Storage,
 )
@@ -36,6 +39,9 @@ AUDIT_CONTENTS = [
     README_FILE,
     MANIFEST_FILE,
 ]
+
+SIGNOFF_SUMMARY_FILE = "signoff_summary.json"
+SIGNOFF_INDEX_EXPORT = "signoffs_index.json"
 
 
 class AuditPackError(Exception):
@@ -85,6 +91,27 @@ def _collect_batch_payload(batch: BatchState, storage: Storage) -> dict[str, byt
     if events:
         payload["batch_events.log"] = events.encode("utf-8")
 
+    signoff_summary = build_signoff_summary(batch)
+    if signoff_summary.get("has_signoff"):
+        payload[SIGNOFF_SUMMARY_FILE] = json.dumps(
+            signoff_summary, ensure_ascii=False, indent=2
+        ).encode("utf-8")
+
+        signoff_index = batch.load_signoff_index()
+        if signoff_index:
+            payload[SIGNOFF_INDEX_EXPORT] = json.dumps(
+                signoff_index, ensure_ascii=False, indent=2
+            ).encode("utf-8")
+
+        signoff_ids = batch.list_signoff_ids()
+        for sid in signoff_ids:
+            rpt = batch.load_signoff_report(sid)
+            if rpt:
+                fname = f"{SIGNOFFS_DIR}/{sid}.json"
+                payload[fname] = json.dumps(
+                    rpt.model_dump(mode="json"), ensure_ascii=False, indent=2
+                ).encode("utf-8")
+
     return payload
 
 
@@ -105,6 +132,16 @@ def _build_readme(batch: BatchState, payload: dict[str, bytes]) -> str:
     lines.append(f"发放成功       : {batch.success_count}")
     lines.append(f"发放失败       : {batch.fail_count}")
     lines.append("")
+
+    if SIGNOFF_SUMMARY_FILE in payload:
+        signoff = json.loads(payload[SIGNOFF_SUMMARY_FILE].decode("utf-8"))
+        lines.append(f"签收状态       : {signoff.get('status', 'none')}")
+        lines.append(f"签收导入次数   : {signoff.get('count', 0)}")
+        lines.append(f"已签收考场     : {signoff.get('signed_rooms', 0)}/{signoff.get('total_expected', 0)}")
+        lines.append(f"签收异常数     : {signoff.get('abnormal_count', 0)}")
+        if signoff.get("last_imported_at"):
+            lines.append(f"最后签收导入   : {signoff.get('last_imported_at')}")
+        lines.append("")
     lines.append("包含文件:")
     for name in sorted(payload.keys()):
         size = len(payload[name])
@@ -157,6 +194,15 @@ def _build_manifest(batch: BatchState, payload: dict[str, bytes]) -> dict:
         rep = json.loads(payload[ROLLBACK_REPORT_FILE].decode("utf-8"))
         rollback_count = len(rep.get("results", []))
 
+    signoff_count = 0
+    signoff_signed_rooms = 0
+    signoff_abnormal = 0
+    if SIGNOFF_SUMMARY_FILE in payload:
+        summary = json.loads(payload[SIGNOFF_SUMMARY_FILE].decode("utf-8"))
+        signoff_count = summary.get("count", 0)
+        signoff_signed_rooms = summary.get("signed_rooms", 0)
+        signoff_abnormal = summary.get("abnormal_count", 0)
+
     return {
         "schema_version": "1.0",
         "generated_at": datetime.now().isoformat(),
@@ -167,6 +213,9 @@ def _build_manifest(batch: BatchState, payload: dict[str, bytes]) -> dict:
             "precheck_items": precheck_count,
             "dispatch_items": dispatch_count,
             "rollback_results": rollback_count,
+            "signoff_imports": signoff_count,
+            "signoff_signed_rooms": signoff_signed_rooms,
+            "signoff_abnormal": signoff_abnormal,
         },
         "files_sha256": files_sha,
     }

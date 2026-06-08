@@ -24,6 +24,11 @@ class ExitCode:
     ROLLBACK_TAMPERED = 9
     IO_ERROR = 10
     BATCH_ID_CONFLICT = 11
+    SIGNOFF_BATCH_NOT_DISPATCHED = 12
+    SIGNOFF_ROOM_NOT_IN_BATCH = 13
+    SIGNOFF_COUNT_MISMATCH = 14
+    SIGNOFF_CONFLICT = 15
+    SIGNOFF_UPDATE_WITHOUT_FORCE = 16
     AUDIT_OUTPUT_CONFLICT = 20
     AUDIT_OUTPUT_PERMISSION = 21
     AUDIT_MISSING_REPORT = 22
@@ -156,3 +161,58 @@ def compute_sha256(path: str | Path, chunk_size: int = 8192) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+class SignoffRow(BaseModel):
+    exam_id: str
+    room_id: str
+    subject: str
+    signoff_person: str
+    signoff_time: str
+    received_count: int
+    damage_note: str = ""
+    remark: str = ""
+    line_no: int = 0
+
+    @classmethod
+    def from_csv(cls, path: str | Path) -> list["SignoffRow"]:
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"签收清单不存在: {p}")
+        rows: list[SignoffRow] = []
+        with p.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            required = {"exam_id", "room_id", "subject", "signoff_person",
+                        "signoff_time", "received_count"}
+            if not required.issubset(set(reader.fieldnames or [])):
+                missing = required - set(reader.fieldnames or [])
+                raise ValueError(f"签收 CSV 缺少必要列: {', '.join(missing)}")
+            for i, row in enumerate(reader, start=2):
+                rows.append(cls(
+                    exam_id=row["exam_id"].strip(),
+                    room_id=row["room_id"].strip(),
+                    subject=row["subject"].strip(),
+                    signoff_person=row["signoff_person"].strip(),
+                    signoff_time=row["signoff_time"].strip(),
+                    received_count=int(row["received_count"]),
+                    damage_note=row.get("damage_note", "").strip(),
+                    remark=row.get("remark", "").strip(),
+                    line_no=i,
+                ))
+        return rows
+
+
+class SignoffReport(BaseModel):
+    signoff_id: str
+    batch_id: str
+    csv_path: str = ""
+    total_rows: int = 0
+    valid_rows: int = 0
+    invalid_rooms: list[dict] = Field(default_factory=list)
+    count_mismatches: list[dict] = Field(default_factory=list)
+    conflicts: list[dict] = Field(default_factory=list)
+    signoff_items: list[dict] = Field(default_factory=list)
+    signed_rooms: int = 0
+    abnormal_count: int = 0
+    passed: bool = False
+    imported_at: str = Field(default_factory=lambda: datetime.now().isoformat())

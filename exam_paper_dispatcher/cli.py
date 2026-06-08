@@ -14,6 +14,7 @@ from .models import (
     DispatchConfig,
     ExitCode,
     RoomRow,
+    SignoffRow,
 )
 from .storage import Storage
 from .precheck import PreCheckError, precheck_and_save
@@ -32,6 +33,7 @@ from .audit_pack import (
     verify_audit_pack,
 )
 from .preview import run_import_preview
+from .signoff import SignoffError, import_signoff
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
@@ -56,6 +58,20 @@ def _load_rows(ctx: click.Context, csv_path: str) -> list[RoomRow]:
         ctx.exit(ExitCode.INVALID_CSV)
     except Exception as e:
         err_console.print(f"[CSV错误] 读取失败: {e}")
+        ctx.exit(ExitCode.INVALID_CSV)
+
+
+def _load_signoff_rows(ctx: click.Context, csv_path: str) -> list[SignoffRow]:
+    try:
+        return SignoffRow.from_csv(csv_path)
+    except FileNotFoundError as e:
+        err_console.print(f"[签收CSV错误] {e}")
+        ctx.exit(ExitCode.INVALID_CSV)
+    except ValueError as e:
+        err_console.print(f"[签收CSV错误] {e}")
+        ctx.exit(ExitCode.INVALID_CSV)
+    except Exception as e:
+        err_console.print(f"[签收CSV错误] 读取失败: {e}")
         ctx.exit(ExitCode.INVALID_CSV)
 
 
@@ -231,6 +247,118 @@ def _print_preview_report(report):
         console.print(t)
 
 
+def _print_signoff_report(report, error: Optional[SignoffError]):
+    title = "签收导入成功" if report.passed else "签收导入失败"
+    style = "green" if report.passed else "red"
+    p = Panel.fit(
+        f"批次: [bold]{report.batch_id}[/bold]\n"
+        f"签收ID: [bold]{report.signoff_id}[/bold]\n"
+        f"总行数: {report.total_rows}  |  有效: {report.valid_rows}\n"
+        f"已签收考场: {report.signed_rooms}  |  异常数: {report.abnormal_count}\n"
+        f"考场不在批次: {len(report.invalid_rooms)}  |  份数不匹配: {len(report.count_mismatches)}\n"
+        f"冲突项: {len(report.conflicts)}",
+        title=f"[{style}]{title}[/{style}]",
+        border_style=style,
+    )
+    console.print(p)
+
+    if report.signoff_items:
+        t = Table(title=f"签收明细 (共 {len(report.signoff_items)} 项)", show_lines=True)
+        t.add_column("考场", style="bold")
+        t.add_column("科目")
+        t.add_column("签收人")
+        t.add_column("签收时间")
+        t.add_column("实收份数")
+        t.add_column("缺损说明")
+        t.add_column("备注")
+        t.add_column("异常")
+        for it in report.signoff_items:
+            abn_style = "red" if it.get("is_abnormal") else "white"
+            t.add_row(
+                it["room_id"],
+                it["subject"],
+                it["signoff_person"],
+                it["signoff_time"],
+                str(it["received_count"]),
+                it.get("damage_note", ""),
+                it.get("remark", ""),
+                f"[{abn_style}]{'是' if it.get('is_abnormal') else '否'}[/{abn_style}]",
+            )
+        console.print(t)
+
+    if report.invalid_rooms:
+        t = Table(title="考场不在批次中", show_lines=True)
+        t.add_column("行号", style="dim")
+        t.add_column("考试ID")
+        t.add_column("考场")
+        t.add_column("科目")
+        t.add_column("说明", style="red")
+        for m in report.invalid_rooms:
+            t.add_row(
+                str(m.get("line_no", "")),
+                m.get("exam_id", ""),
+                m.get("room_id", ""),
+                m.get("subject", ""),
+                m.get("message", ""),
+            )
+        console.print(t)
+
+    if report.count_mismatches:
+        t = Table(title="份数不匹配", show_lines=True)
+        t.add_column("行号", style="dim")
+        t.add_column("考场")
+        t.add_column("科目")
+        t.add_column("期望份数", style="cyan")
+        t.add_column("实收份数", style="red")
+        for m in report.count_mismatches:
+            t.add_row(
+                str(m.get("line_no", "")),
+                m.get("room_id", ""),
+                m.get("subject", ""),
+                str(m.get("expected", "")),
+                str(m.get("received", "")),
+            )
+        console.print(t)
+
+    if report.conflicts:
+        existing = [c for c in report.conflicts if c.get("type") == "existing_signoff"]
+        dup_csv = [c for c in report.conflicts if c.get("type") == "duplicate_in_csv"]
+        if existing:
+            t = Table(title="重复签收冲突（需 --force 确认更新）", show_lines=True)
+            t.add_column("考场")
+            t.add_column("科目")
+            t.add_column("原签收人")
+            t.add_column("原签收时间")
+            t.add_column("新签收人")
+            t.add_column("新签收时间")
+            for c in existing:
+                t.add_row(
+                    c.get("room_id", ""),
+                    c.get("subject", ""),
+                    c.get("old_signoff_person", ""),
+                    c.get("old_signoff_time", ""),
+                    c.get("new_signoff_person", ""),
+                    c.get("new_signoff_time", ""),
+                )
+            console.print(t)
+        if dup_csv:
+            t = Table(title="CSV 内重复考场", show_lines=True)
+            t.add_column("考场")
+            t.add_column("科目")
+            t.add_column("涉及行号")
+            for c in dup_csv:
+                t.add_row(
+                    c.get("room_id", ""),
+                    c.get("subject", ""),
+                    ", ".join(str(l) for l in c.get("lines", [])),
+                )
+            console.print(t)
+
+    if not report.passed and error:
+        err_console.print(f"[red]错误: {error.message}[/red]")
+        err_console.print(f"退出码: {error.exit_code}")
+
+
 @click.group(help="离线考试试卷包校验与发放 CLI")
 @click.option("--storage-dir", default=".exam_dispatch_state", show_default=True,
               help="持久化存储目录")
@@ -384,13 +512,16 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
             console.print("[dim]无批次记录[/dim]")
             ctx.exit(ExitCode.SUCCESS)
         t = Table(title=f"批次列表 (共 {len(rows)} 个)")
-        t.add_column("批次ID", style="bold")
-        t.add_column("状态")
-        t.add_column("创建时间")
-        t.add_column("更新时间")
-        t.add_column("项目数")
-        t.add_column("成功/失败")
-        t.add_column("备注")
+        t.add_column("批次ID", style="bold", overflow="fold")
+        t.add_column("状态", overflow="fold")
+        t.add_column("创建时间", overflow="fold")
+        t.add_column("更新时间", overflow="fold")
+        t.add_column("项目", overflow="fold")
+        t.add_column("成/败", overflow="fold")
+        t.add_column("签收", overflow="fold")
+        t.add_column("异常", overflow="fold")
+        t.add_column("最后签收", overflow="fold")
+        t.add_column("备注", overflow="fold")
         for r in rows:
             st_style = {
                 "completed": "green",
@@ -403,14 +534,23 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
                 "rolling_back": "magenta",
                 "rollback_failed": "red",
             }.get(r["status"], "white")
+            signoff_status = r.get("signoff_status", "none")
+            signoff_style = {
+                "complete": "green",
+                "partial": "yellow",
+                "none": "dim",
+            }.get(signoff_status, "white")
             t.add_row(
                 r["batch_id"],
                 f"[{st_style}]{r['status']}[/{st_style}]",
-                r["created_at"],
-                r["updated_at"],
+                r["created_at"][:19],
+                r["updated_at"][:19],
                 str(r["total_items"]),
                 f"{r['success_count']}/{r['fail_count']}",
-                r.get("notes", "")[:40],
+                f"[{signoff_style}]{signoff_status}[/{signoff_style}]",
+                str(r.get("signoff_abnormal_count", 0)),
+                str(r.get("signoff_last_imported_at", ""))[:19],
+                r.get("notes", "")[:30],
             )
         console.print(t)
     ctx.exit(ExitCode.SUCCESS)
@@ -485,6 +625,34 @@ def export(ctx: click.Context, fmt: str, batch_id: Optional[str], output_path: s
     except Exception as e:
         err_console.print(f"导出失败: {e}")
         ctx.exit(ExitCode.IO_ERROR)
+
+
+@main.command(
+    help="发放签收核销: 导入签收 CSV，按批次记录每个考场的签收人、时间、"
+         "实收份数、缺损说明和备注，生成核销摘要。"
+         "导入时校验批次已发放、考场属于该批次、份数与预检人数匹配；"
+         "同一考场重复导入不会静默覆盖，需加 --force 确认更新。"
+)
+@click.option("--batch-id", required=True, help="批次 ID（必须已完成发放）")
+@click.option("--signoffs", "csv_path", required=True, help="签收 CSV 清单路径")
+@click.option("--force", is_flag=True,
+              help="强制覆盖已存在的考场签收记录（默认拒绝重复导入并提示冲突）")
+@click.pass_context
+def signoff(ctx: click.Context, batch_id: str, csv_path: str, force: bool):
+    storage: Storage = ctx.obj["storage"]
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        err_console.print(f"批次不存在: {batch_id}")
+        ctx.exit(ExitCode.BATCH_NOT_FOUND)
+
+    rows = _load_signoff_rows(ctx, csv_path)
+
+    report, error = import_signoff(storage, batch, rows, csv_path, force=force)
+    _print_signoff_report(report, error)
+
+    if error:
+        ctx.exit(error.exit_code)
+    ctx.exit(ExitCode.SUCCESS)
 
 
 @main.command(

@@ -1,0 +1,251 @@
+{
+  "batch_id": "batch-20260608-170845-f474bd",
+  "commands": [
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "precheck",
+        "--config",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\config.json",
+        "--rooms",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\rooms.csv"
+      ],
+      "returncode": 0,
+      "stdout": " 批次创建: batch-20260608-170845-f474bd\n+------------- 预检通过 -------------+\n| 批次: batch-20260608-170845-f474bd |\n| 总行数: 3  |  有效: 3              |\n| 缺失源文件: 0  |  目标冲突: 0      |\n| 非法科目: 0  |  版本问题: 0        |\n+------------------------------------+\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "dispatch",
+        "--batch-id",
+        "batch-20260608-170845-f474bd"
+      ],
+      "returncode": 0,
+      "stdout": "                              发放结果 (成功 3/3)                              \n+-----------------------------------------------------------------------------+\n| 目标名                | 考场 | 科目    | 目标路径             | 状态 | 错误 |\n|-----------------------+------+---------+----------------------+------+------|\n| 20260608_A101_math    | A101 | math    | D:\\workSpace\\AI__SP… | OK   |      |\n| 20260608_A102_math    | A102 | math    | D:\\workSpace\\AI__SP… | OK   |      |\n| 20260608_B201_english | B201 | english | D:\\workSpace\\AI__SP… | OK   |      |\n+-----------------------------------------------------------------------------+\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "signoff",
+        "--batch-id",
+        "batch-20260608-170845-f474bd",
+        "--signoffs",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_ok.csv"
+      ],
+      "returncode": 0,
+      "stdout": "+------------- 签收导入成功 -------------+\n| 批次: batch-20260608-170845-f474bd     |\n| 签收ID: signoff-20260608-170846-174527 |\n| 总行数: 3  |  有效: 3                  |\n| 已签收考场: 3  |  异常数: 1            |\n| 考场不在批次: 0  |  份数不匹配: 0      |\n| 冲突项: 0                              |\n+----------------------------------------+\n                              签收明细 (共 3 项)                               \n+-----------------------------------------------------------------------------+\n| 考场 | 科目    | 签收人 | 签收时间 | 实收份数 | 缺损说明  | 备注     | 异常 |\n|------+---------+--------+----------+----------+-----------+----------+------|\n| A101 | math    | 张三   | 2026-06… | 30       |           | 首轮签收 | 否   |\n|      |         |        | 09:00:00 |          |           |          |      |\n|------+---------+--------+----------+----------+-----------+----------+------|\n| A102 | math    | 李四   | 2026-06… | 28       | 封面轻微… |          | 是   |\n|      |         |        | 09:05:00 |          |           |          |      |\n|------+---------+--------+----------+----------+-----------+----------+------|\n| B201 | english | 王五   | 2026-06… | 35       |           | 正常签收 | 否   |\n|      |         |        | 09:10:00 |          |           |          |      |\n+-----------------------------------------------------------------------------+\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "query"
+      ],
+      "returncode": 0,
+      "stdout": "                              批次列表 (共 1 个)                               \n+-----------------------------------------------------------------------------+\n| 批次I |       | 创建  | 更新  |      |       |       |      | 最后  |       |\n| D     | 状态  | 时间  | 时间  | 项目 | 成/败 | 签收  | 异常 | 签收  | 备注  |\n|-------+-------+-------+-------+------+-------+-------+------+-------+-------|\n| batch | compl | 2026- | 2026- | 3    | 3/0   | compl | 1    | 2026- | 发放  |\n| -2026 | eted  | 06-08 | 06-08 |      |       | ete   |      | 06-08 | 完成: |\n| 0608- |       | T17:0 | T17:0 |      |       |       |      | T17:0 |  成功 |\n| 17084 |       | 8:45  | 8:45  |      |       |       |      | 8:46  | 3/3   |\n| 5-f47 |       |       |       |      |       |       |      |       |       |\n| 4bd   |       |       |       |      |       |       |      |       |       |\n+-----------------------------------------------------------------------------+\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "query",
+        "--batch-id",
+        "batch-20260608-170845-f474bd"
+      ],
+      "returncode": 0,
+      "stdout": "{\n  \"batch_id\": \"batch-20260608-170845-f474bd\",\n  \"status\": \"completed\",\n  \"created_at\": \"2026-06-08T17:08:45.127225\",\n  \"updated_at\": \"2026-06-08T17:08:45.689784\",\n  \"csv_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\rooms.csv\",\n  \"total_items\": 3,\n  \"success_count\": 3,\n  \"fail_count\": 0,\n  \"notes\": \"发放完成: 成功 3/3\",\n  \"precheck\": {\n    \"passed\": true,\n    \"total_rows\": 3,\n    \"valid_rows\": 3,\n    \"missing_sources\": [],\n    \"target_conflicts\": [],\n    \"invalid_subjects\": [],\n    \"invalid_versions\": [],\n    \"checked_at\": \"2026-06-08T17:08:45.139800\"\n  },\n  \"dispatch\": {\n    \"saved_at\": \"2026-06-08T17:08:45.687423\",\n    \"items_summary\": [\n      {\n        \"target_name\": \"20260608_A101_math\",\n        \"room_id\": \"A101\",\n        \"subject\": \"math\",\n        \"dispatched\": true,\n        \"target_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\output\\\\20260608_A101_math.zip\",\n        \"target_sha256\": \"fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0\",\n        \"error\": null\n      },\n      {\n        \"target_name\": \"20260608_A102_math\",\n        \"room_id\": \"A102\",\n        \"subject\": \"math\",\n        \"dispatched\": true,\n        \"target_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\output\\\\20260608_A102_math.zip\",\n        \"target_sha256\": \"fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0\",\n        \"error\": null\n      },\n      {\n        \"target_name\": \"20260608_B201_english\",\n        \"room_id\": \"B201\",\n        \"subject\": \"english\",\n        \"dispatched\": true,\n        \"target_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\output\\\\20260608_B201_english.zip\",\n        \"target_sha256\": \"6255d50be7ae4a1b98623890f0c5e4c8d9862e054a9337c786721428469351f8\",\n        \"error\": null\n      }\n    ]\n  },\n  \"signoff\": {\n    \"has_signoff\": true,\n    \"count\": 1,\n    \"signoff_ids\": [\n      \"signoff-20260608-170846-174527\"\n    ],\n    \"index\": {\n      \"signoff-20260608-170846-174527\": {\n        \"signoff_id\": \"signoff-20260608-170846-174527\",\n        \"imported_at\": \"2026-06-08T17:08:46.242085\",\n        \"passed\": true,\n        \"total_rows\": 3,\n        \"valid_rows\": 3,\n        \"signed_rooms\": 3,\n        \"abnormal_count\": 1,\n        \"csv_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\signoffs_ok.csv\"\n      }\n    },\n    \"status\": \"complete\",\n    \"signed_rooms\": 3,\n    \"total_expected\": 3,\n    \"abnormal_count\": 1,\n    \"last_imported_at\": \"2026-06-08T17:08:46.242085\",\n    \"last_signoff_id\": \"signoff-20260608-170846-174527\"\n  }\n}\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "export",
+        "--format",
+        "json",
+        "--output",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\export_before.json"
+      ],
+      "returncode": 0,
+      "stdout": "已导出到: D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\export_before.json\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "export",
+        "--format",
+        "csv-items",
+        "--batch-id",
+        "batch-20260608-170845-f474bd",
+        "--output",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\items_before.csv"
+      ],
+      "returncode": 0,
+      "stdout": "已导出到: D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\items_before.csv\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "signoff",
+        "--batch-id",
+        "batch-20260608-170845-f474bd",
+        "--signoffs",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_bad.csv"
+      ],
+      "returncode": 14,
+      "stdout": "+------------- 签收导入失败 -------------+\n| 批次: batch-20260608-170845-f474bd     |\n| 签收ID: signoff-20260608-170849-4c79dd |\n| 总行数: 2  |  有效: 0                  |\n| 已签收考场: 0  |  异常数: 0            |\n| 考场不在批次: 1  |  份数不匹配: 1      |\n| 冲突项: 0                              |\n+----------------------------------------+\n                                考场不在批次中                                 \n+-----------------------------------------------------------------------------+\n| 行号 | 考试ID   | 考场 | 科目 | 说明                                        |\n|------+----------+------+------+---------------------------------------------|\n| 2    | 20260608 | Z999 | math | 考场 Z999/math 不属于批次                   |\n|      |          |      |      | batch-20260608-170845-f474bd                |\n+-----------------------------------------------------------------------------+\n                 份数不匹配                 \n+------------------------------------------+\n| 行号 | 考场 | 科目 | 期望份数 | 实收份数 |\n|------+------+------+----------+----------|\n| 3    | A101 | math | 30       | 999      |\n+------------------------------------------+\n",
+      "stderr": "错误: 签收导入失败: 考场不在批次中 1 项, 份数不匹配 1 项\n退出码: 14\n"
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "signoff",
+        "--batch-id",
+        "batch-20260608-170845-f474bd",
+        "--signoffs",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_update.csv"
+      ],
+      "returncode": 16,
+      "stdout": "+------------- 签收导入失败 -------------+\n| 批次: batch-20260608-170845-f474bd     |\n| 签收ID: signoff-20260608-170849-00d374 |\n| 总行数: 1  |  有效: 0                  |\n| 已签收考场: 0  |  异常数: 0            |\n| 考场不在批次: 0  |  份数不匹配: 0      |\n| 冲突项: 1                              |\n+----------------------------------------+\n                      重复签收冲突（需 --force 确认更新）                      \n+-----------------------------------------------------------------------------+\n| 考场 | 科目 | 原签收人 | 原签收时间         | 新签收人 | 新签收时间         |\n|------+------+----------+--------------------+----------+--------------------|\n| A101 | math | 张三     | 2026-06-08         | 赵六     | 2026-06-08         |\n|      |      |          | 09:00:00           |          | 11:00:00           |\n+-----------------------------------------------------------------------------+\n",
+      "stderr": "错误: 签收导入失败: 重复签收冲突 1 项，需加 --force 确认更新\n退出码: 16\n"
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "signoff",
+        "--batch-id",
+        "batch-20260608-170845-f474bd",
+        "--signoffs",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_update.csv",
+        "--force"
+      ],
+      "returncode": 0,
+      "stdout": "+------------- 签收导入成功 -------------+\n| 批次: batch-20260608-170845-f474bd     |\n| 签收ID: signoff-20260608-170850-20596a |\n| 总行数: 1  |  有效: 1                  |\n| 已签收考场: 1  |  异常数: 0            |\n| 考场不在批次: 0  |  份数不匹配: 0      |\n| 冲突项: 0                              |\n+----------------------------------------+\n                              签收明细 (共 1 项)                               \n+-----------------------------------------------------------------------------+\n| 考场 | 科目 | 签收人 | 签收时间   | 实收份数 | 缺损说明 | 备注       | 异常 |\n|------+------+--------+------------+----------+----------+------------+------|\n| A101 | math | 赵六   | 2026-06-08 | 30       |          | 改派签收人 | 否   |\n|      |      |        | 11:00:00   |          |          |            |      |\n+-----------------------------------------------------------------------------+\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "query",
+        "--batch-id",
+        "batch-20260608-170845-f474bd"
+      ],
+      "returncode": 0,
+      "stdout": "{\n  \"batch_id\": \"batch-20260608-170845-f474bd\",\n  \"status\": \"completed\",\n  \"created_at\": \"2026-06-08T17:08:45.127225\",\n  \"updated_at\": \"2026-06-08T17:08:45.689784\",\n  \"csv_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\rooms.csv\",\n  \"total_items\": 3,\n  \"success_count\": 3,\n  \"fail_count\": 0,\n  \"notes\": \"发放完成: 成功 3/3\",\n  \"precheck\": {\n    \"passed\": true,\n    \"total_rows\": 3,\n    \"valid_rows\": 3,\n    \"missing_sources\": [],\n    \"target_conflicts\": [],\n    \"invalid_subjects\": [],\n    \"invalid_versions\": [],\n    \"checked_at\": \"2026-06-08T17:08:45.139800\"\n  },\n  \"dispatch\": {\n    \"saved_at\": \"2026-06-08T17:08:45.687423\",\n    \"items_summary\": [\n      {\n        \"target_name\": \"20260608_A101_math\",\n        \"room_id\": \"A101\",\n        \"subject\": \"math\",\n        \"dispatched\": true,\n        \"target_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\output\\\\20260608_A101_math.zip\",\n        \"target_sha256\": \"fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0\",\n        \"error\": null\n      },\n      {\n        \"target_name\": \"20260608_A102_math\",\n        \"room_id\": \"A102\",\n        \"subject\": \"math\",\n        \"dispatched\": true,\n        \"target_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\output\\\\20260608_A102_math.zip\",\n        \"target_sha256\": \"fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0\",\n        \"error\": null\n      },\n      {\n        \"target_name\": \"20260608_B201_english\",\n        \"room_id\": \"B201\",\n        \"subject\": \"english\",\n        \"dispatched\": true,\n        \"target_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\output\\\\20260608_B201_english.zip\",\n        \"target_sha256\": \"6255d50be7ae4a1b98623890f0c5e4c8d9862e054a9337c786721428469351f8\",\n        \"error\": null\n      }\n    ]\n  },\n  \"signoff\": {\n    \"has_signoff\": true,\n    \"count\": 2,\n    \"signoff_ids\": [\n      \"signoff-20260608-170846-174527\",\n      \"signoff-20260608-170850-20596a\"\n    ],\n    \"index\": {\n      \"signoff-20260608-170846-174527\": {\n        \"signoff_id\": \"signoff-20260608-170846-174527\",\n        \"imported_at\": \"2026-06-08T17:08:46.242085\",\n        \"passed\": true,\n        \"total_rows\": 3,\n        \"valid_rows\": 3,\n        \"signed_rooms\": 3,\n        \"abnormal_count\": 1,\n        \"csv_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\signoffs_ok.csv\"\n      },\n      \"signoff-20260608-170850-20596a\": {\n        \"signoff_id\": \"signoff-20260608-170850-20596a\",\n        \"imported_at\": \"2026-06-08T17:08:50.156412\",\n        \"passed\": true,\n        \"total_rows\": 1,\n        \"valid_rows\": 1,\n        \"signed_rooms\": 1,\n        \"abnormal_count\": 0,\n        \"csv_path\": \"D:\\\\workSpace\\\\AI__SPACE\\\\zzz-00022\\\\.review_artifacts\\\\signoffs_update.csv\"\n      }\n    },\n    \"status\": \"partial\",\n    \"signed_rooms\": 1,\n    \"total_expected\": 3,\n    \"abnormal_count\": 0,\n    \"last_imported_at\": \"2026-06-08T17:08:50.156412\",\n    \"last_signoff_id\": \"signoff-20260608-170850-20596a\"\n  }\n}\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "export",
+        "--format",
+        "json",
+        "--output",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\export_after.json"
+      ],
+      "returncode": 0,
+      "stdout": "已导出到: D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\export_after.json\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "C:\\Users\\admin\\Python312\\python.exe",
+        "-m",
+        "exam_paper_dispatcher.cli",
+        "--storage-dir",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\state",
+        "export",
+        "--format",
+        "csv-items",
+        "--batch-id",
+        "batch-20260608-170845-f474bd",
+        "--output",
+        "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\items_after.csv"
+      ],
+      "returncode": 0,
+      "stdout": "已导出到: D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\items_after.csv\n",
+      "stderr": ""
+    }
+  ],
+  "state_tree": [
+    "config.json",
+    "export_after.json",
+    "export_before.json",
+    "items_after.csv",
+    "items_before.csv",
+    "output",
+    "output\\20260608_A101_math.zip",
+    "output\\20260608_A102_math.zip",
+    "output\\20260608_B201_english.zip",
+    "papers",
+    "papers\\paper_chinese_v1.pdf",
+    "papers\\paper_english_v2.pdf",
+    "papers\\paper_math_v1.pdf",
+    "rooms.csv",
+    "signoffs_bad.csv",
+    "signoffs_ok.csv",
+    "signoffs_update.csv",
+    "state",
+    "state\\batch-20260608-170845-f474bd",
+    "state\\batch-20260608-170845-f474bd\\config_snapshot.json",
+    "state\\batch-20260608-170845-f474bd\\dispatch_report.json",
+    "state\\batch-20260608-170845-f474bd\\precheck_report.json",
+    "state\\batch-20260608-170845-f474bd\\signoffs",
+    "state\\batch-20260608-170845-f474bd\\signoffs\\signoff-20260608-170846-174527.json",
+    "state\\batch-20260608-170845-f474bd\\signoffs\\signoff-20260608-170850-20596a.json",
+    "state\\batch-20260608-170845-f474bd\\signoffs\\signoffs_index.json",
+    "state\\batches.json",
+    "state\\events.log"
+  ]
+}

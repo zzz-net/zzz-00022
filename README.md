@@ -8,10 +8,11 @@
 - **结构化预检 (dry-run)**：科目/版本/人数/源文件路径/目标文件名多重校验
 - **目标冲突检测**：复制前发现重复目标名立即报错终止
 - **批次发放**：支持目录复制或 zip 打包两种模式
-- **状态持久化**：批次状态、配置快照、预检/预演/发放/回滚报告落盘，重启不丢失
+- **发放签收核销**：发放后导入签收 CSV，按批次记录每个考场的签收人、时间、实收份数、缺损说明和备注；校验批次已发放、考场归属、份数匹配；重复导入冲突需显式 --force 确认；生成核销摘要，持久化并可 query/export
+- **状态持久化**：批次状态、配置快照、预检/预演/发放/回滚/签收报告落盘，重启不丢失
 - **安全回滚**：校验 SHA256，发现目标文件被替换时停止并给出证据
 - **交接审计包**：一键打包配置快照、各类报告、事件日志为离线 zip，内置 manifest + SHA256 防篡改校验
-- **数据导出**：支持 JSON、批次 CSV、发放明细 CSV（导出结果自动包含预演摘要）
+- **数据导出**：支持 JSON、批次 CSV、发放明细 CSV（导出结果自动包含预演和签收摘要）
 
 ## 安装
 
@@ -79,14 +80,15 @@ exam_id,room_id,subject,students_count,source_file,target_name
 ## 命令速览
 
 ```
-exam-dispatch preview       --config ... --rooms ...     # 第0步：导入预演（可选，不写出试卷包）
-exam-dispatch precheck      --config ... --rooms ...     # 第1步：预检
-exam-dispatch dispatch      --batch-id ...               # 第2步：发放
-exam-dispatch query         [--batch-id ...]             # 第3步：查询
-exam-dispatch rollback      --batch-id ... [--force]     # 第4步：回滚
-exam-dispatch audit-pack    --batch-id ... --output ...  # 打包：生成交接审计包
-exam-dispatch audit-verify  --archive ...                # 验包：校验审计包完整性
-exam-dispatch export        --format ... --output ...    # 导出数据
+exam-dispatch preview       --config ... --rooms ...                    # 第0步：导入预演（可选，不写出试卷包）
+exam-dispatch precheck      --config ... --rooms ...                    # 第1步：预检
+exam-dispatch dispatch      --batch-id ...                              # 第2步：发放
+exam-dispatch signoff       --batch-id ... --signoffs ... [--force]     # 第3步：发放签收核销
+exam-dispatch query         [--batch-id ...]                            # 第4步：查询
+exam-dispatch rollback      --batch-id ... [--force]                    # 第5步：回滚
+exam-dispatch audit-pack    --batch-id ... --output ...                 # 打包：生成交接审计包
+exam-dispatch audit-verify  --archive ...                               # 验包：校验审计包完整性
+exam-dispatch export        --format ... --output ...                   # 导出数据
 ```
 
 ---
@@ -174,7 +176,62 @@ python -m exam_paper_dispatcher.cli dispatch --batch-id <上一步的批次ID>
 
 ---
 
-### 第 3 步：查询 (query)
+### 第 3 步：发放签收核销 (signoff)
+
+发放完成后，考务人员通过签收 CSV 录入各考场的实际签收情况，系统自动校验并生成核销摘要。
+
+#### 签收 CSV 格式
+
+```csv
+exam_id,room_id,subject,signoff_person,signoff_time,received_count,damage_note,remark
+20260608,A101,math,张三,2026-06-08 09:00:00,30,,
+20260608,A102,math,李四,2026-06-08 09:05:00,28,1份封面轻微破损,
+```
+
+必填列：`exam_id`, `room_id`, `subject`, `signoff_person`, `signoff_time`, `received_count`
+可选列：`damage_note`（缺损说明）, `remark`（备注）
+
+#### 校验规则
+
+1. **批次已发放**：批次状态必须为 `completed`
+2. **考场归属**：`(exam_id, room_id, subject)` 必须存在于该批次预检报告中
+3. **份数匹配**：`received_count` 必须与预检人数一致
+4. **冲突检测**：同一考场（三元组）已存在签收记录时拒绝静默覆盖，需加 `--force` 显式确认更新
+
+#### 使用
+
+```bash
+# 导入签收 CSV
+python -m exam_paper_dispatcher.cli signoff \
+  --batch-id <批次ID> \
+  --signoffs signoffs.csv
+
+# 发现冲突后强制更新已签收考场
+python -m exam_paper_dispatcher.cli signoff \
+  --batch-id <批次ID> \
+  --signoffs signoffs.csv \
+  --force
+```
+
+- **输出**：
+  - 签收报告 ID、导入时间
+  - 核销摘要：总考场数、已签收、异常数、份数不匹配、考场不在批次、冲突数
+  - 明细表（考场、签收人、时间、实收、缺损说明、备注、是否异常）
+  - 冲突表（重复导入的考场 + 前次签收时间）
+
+- **退出码**：
+  - `0` 导入成功（无校验错误）
+  - `12` 批次尚未完成发放
+  - `13` 考场不属于该批次
+  - `14` 实收份数与预检人数不匹配
+  - `15` CSV 内部存在重复考场等冲突
+  - `16` 已存在签收记录，需加 `--force` 确认覆盖
+
+> 签收数据按批次持久化（`storage_dir/batches/<batch_id>/signoffs/`），重启 CLI 后 `query` 列表可查看签收状态、异常数量、最后导入时间；`export` 导出 JSON/CSV 自动附带签收摘要和每个考场的签收明细。
+
+---
+
+### 第 4 步：查询 (query)
 
 ```bash
 # 列出所有批次
@@ -187,12 +244,12 @@ python -m exam_paper_dispatcher.cli query --status completed
 python -m exam_paper_dispatcher.cli query --batch-id <批次ID>
 ```
 
-列表显示：批次 ID、状态、创建/更新时间、项目数、成功/失败、备注。
-详情 JSON 包含：配置快照、预检报告、预演摘要、发放明细（含 SHA256）、回滚记录。
+列表显示：批次 ID、状态、创建/更新时间、项目数、成功/失败、签收状态、签收异常数、最后签收时间、备注。
+详情 JSON 包含：配置快照、预检报告、预演摘要、签收摘要、发放明细（含 SHA256）、回滚记录。
 
 ---
 
-### 第 4 步：回滚 (rollback)
+### 第 5 步：回滚 (rollback)
 
 ```bash
 # 安全回滚（校验 SHA256，文件被替换会停止）
@@ -332,6 +389,11 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
 | 9 | ROLLBACK_TAMPERED | 回滚时发现文件被替换，已停止 |
 | 10 | IO_ERROR | 文件复制/删除/打包等 I/O 错误 |
 | 11 | BATCH_ID_CONFLICT | 自定义批次 ID 已存在，拒绝复用覆盖 |
+| 12 | SIGNOFF_BATCH_NOT_DISPATCHED | 签收失败：批次尚未完成发放 |
+| 13 | SIGNOFF_ROOM_NOT_IN_BATCH | 签收失败：考场不属于该批次 |
+| 14 | SIGNOFF_COUNT_MISMATCH | 签收失败：实收份数与预检人数不匹配 |
+| 15 | SIGNOFF_CONFLICT | 签收冲突（CSV 内重复考场等） |
+| 16 | SIGNOFF_UPDATE_WITHOUT_FORCE | 签收失败：已存在签收记录，需加 --force 确认覆盖 |
 | 20 | AUDIT_OUTPUT_CONFLICT | audit-pack 输出文件已存在（未加 --force） |
 | 21 | AUDIT_OUTPUT_PERMISSION | audit-pack 输出目录不可写或无法创建 |
 | 22 | AUDIT_MISSING_REPORT | audit-pack 缺少配置快照或预检报告 |
@@ -370,7 +432,10 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
     ├── precheck_report.json     # 预检报告
     ├── dispatch_report.json     # 发放明细（含 SHA256）
     ├── rollback_report.json     # 回滚明细
-    └── previews/                # 导入预演报告目录（同一批次可多次预演，不覆盖）
-        ├── previews_index.json  # 预演索引
-        └── preview-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次预演完整报告
+    ├── previews/                # 导入预演报告目录（同一批次可多次预演，不覆盖）
+    │   ├── previews_index.json  # 预演索引
+    │   └── preview-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次预演完整报告
+    └── signoffs/                # 签收核销报告目录（同一批次可多次导入，不静默覆盖）
+        ├── signoffs_index.json  # 签收索引
+        └── signoff-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次签收完整报告
 ```

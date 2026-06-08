@@ -1,0 +1,94 @@
+{
+  "batches": [
+    {
+      "batch_id": "batch-20260608-170845-f474bd",
+      "status": "completed",
+      "created_at": "2026-06-08T17:08:45.127225",
+      "updated_at": "2026-06-08T17:08:45.689784",
+      "csv_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\rooms.csv",
+      "total_items": 3,
+      "success_count": 3,
+      "fail_count": 0,
+      "notes": "发放完成: 成功 3/3",
+      "precheck": {
+        "passed": true,
+        "total_rows": 3,
+        "valid_rows": 3,
+        "missing_sources": [],
+        "target_conflicts": [],
+        "invalid_subjects": [],
+        "invalid_versions": [],
+        "checked_at": "2026-06-08T17:08:45.139800"
+      },
+      "dispatch": {
+        "saved_at": "2026-06-08T17:08:45.687423",
+        "items_summary": [
+          {
+            "target_name": "20260608_A101_math",
+            "room_id": "A101",
+            "subject": "math",
+            "dispatched": true,
+            "target_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\output\\20260608_A101_math.zip",
+            "target_sha256": "fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0",
+            "error": null
+          },
+          {
+            "target_name": "20260608_A102_math",
+            "room_id": "A102",
+            "subject": "math",
+            "dispatched": true,
+            "target_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\output\\20260608_A102_math.zip",
+            "target_sha256": "fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0",
+            "error": null
+          },
+          {
+            "target_name": "20260608_B201_english",
+            "room_id": "B201",
+            "subject": "english",
+            "dispatched": true,
+            "target_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\output\\20260608_B201_english.zip",
+            "target_sha256": "6255d50be7ae4a1b98623890f0c5e4c8d9862e054a9337c786721428469351f8",
+            "error": null
+          }
+        ]
+      },
+      "signoff": {
+        "has_signoff": true,
+        "count": 2,
+        "signoff_ids": [
+          "signoff-20260608-170846-174527",
+          "signoff-20260608-170850-20596a"
+        ],
+        "index": {
+          "signoff-20260608-170846-174527": {
+            "signoff_id": "signoff-20260608-170846-174527",
+            "imported_at": "2026-06-08T17:08:46.242085",
+            "passed": true,
+            "total_rows": 3,
+            "valid_rows": 3,
+            "signed_rooms": 3,
+            "abnormal_count": 1,
+            "csv_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_ok.csv"
+          },
+          "signoff-20260608-170850-20596a": {
+            "signoff_id": "signoff-20260608-170850-20596a",
+            "imported_at": "2026-06-08T17:08:50.156412",
+            "passed": true,
+            "total_rows": 1,
+            "valid_rows": 1,
+            "signed_rooms": 1,
+            "abnormal_count": 0,
+            "csv_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_update.csv"
+          }
+        },
+        "status": "partial",
+        "signed_rooms": 1,
+        "total_expected": 3,
+        "abnormal_count": 0,
+        "last_imported_at": "2026-06-08T17:08:50.156412",
+        "last_signoff_id": "signoff-20260608-170850-20596a"
+      }
+    }
+  ],
+  "events_log": "[2026-06-08T17:08:45.129823] [batch-20260608-170845-f474bd] 保存配置快照 (csv=D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\rooms.csv)\n[2026-06-08T17:08:45.140085] [batch-20260608-170845-f474bd] 保存预检报告: 通过, 3 项\n[2026-06-08T17:08:45.142051] [batch-20260608-170845-f474bd] 状态变更 -> dry_run_passed: 预检通过: 3/3 项\n[2026-06-08T17:08:45.682477] [batch-20260608-170845-f474bd] 状态变更 -> dispatching: 开始发放 3 项\n[2026-06-08T17:08:45.687423] [batch-20260608-170845-f474bd] 保存发放报告: 成功 3, 失败 0\n[2026-06-08T17:08:45.689784] [batch-20260608-170845-f474bd] 状态变更 -> completed: 发放完成: 成功 3/3\n[2026-06-08T17:08:46.242085] [batch-20260608-170845-f474bd] 保存签收报告: signoff-20260608-170846-174527, passed=True, signed=3, abnormal=1\n[2026-06-08T17:08:50.158622] [batch-20260608-170845-f474bd] 保存签收报告: signoff-20260608-170850-20596a, passed=True, signed=1, abnormal=0\n"
+}

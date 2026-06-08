@@ -1,0 +1,13 @@
+{
+  "batch-20260608-170845-f474bd": {
+    "batch_id": "batch-20260608-170845-f474bd",
+    "status": "completed",
+    "created_at": "2026-06-08T17:08:45.127225",
+    "updated_at": "2026-06-08T17:08:45.689784",
+    "csv_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\rooms.csv",
+    "total_items": 3,
+    "success_count": 3,
+    "fail_count": 0,
+    "notes": "发放完成: 成功 3/3"
+  }
+}

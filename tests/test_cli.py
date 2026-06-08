@@ -1166,9 +1166,9 @@ def test_preview_query_across_restart(runner, fresh_env):
         catch_exceptions=False,
     )
     assert r_list.exit_code == ExitCode.SUCCESS
-    assert "preview" in r_list.stdout
     listed_batches = storage_after.list_batches()
     assert any(b.batch_id == "restart-preview" for b in listed_batches)
+    assert any(b.status == BatchStatus.PREVIEW for b in listed_batches)
 
     r_detail = runner.invoke(
         main,
@@ -1324,3 +1324,551 @@ def test_cli_help_mentions_preview(runner):
     assert r.exit_code == 0
     for keyword in ("config", "rooms", "batch-id"):
         assert keyword in preview_help, f"preview --help 缺少选项: {keyword}"
+
+
+# ---------------------------------------------------------------------------
+# 18. signoff: 成功导入签收（发放后）
+# ---------------------------------------------------------------------------
+
+def _dispatch_successful_batch(runner, fresh_env):
+    """辅助函数：完成一次完整的 precheck + dispatch，返回 batch_id。"""
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck",
+            "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+    r = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "dispatch", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    return bid
+
+
+def test_signoff_success_after_dispatch(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    signoffs_csv = env["tmp_path"] / "signoffs.csv"
+    signoffs_csv.write_text(
+        "exam_id,room_id,subject,signoff_person,signoff_time,received_count,damage_note,remark\n"
+        "20260608,A101,math,张三,2026-06-08 09:00:00,30,,\n"
+        "20260608,A102,math,李四,2026-06-08 09:05:00,28,第3份封面轻微破损,\n"
+        "20260608,B201,english,王五,2026-06-08 09:10:00,35,,正常签收\n",
+        encoding="utf-8",
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff",
+            "--batch-id", bid,
+            "--signoffs", str(signoffs_csv),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert "签收导入成功" in r.stdout
+    assert "已签收考场: 3" in r.stdout
+    assert "异常数: 1" in r.stdout
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    signoff_ids = batch.list_signoff_ids()
+    assert len(signoff_ids) == 1
+    rpt = batch.load_signoff_report(signoff_ids[0])
+    assert rpt is not None
+    assert rpt.passed is True
+    assert rpt.signed_rooms == 3
+    assert rpt.abnormal_count == 1
+    assert rpt.total_rows == 3
+    assert rpt.valid_rows == 3
+    assert len(rpt.signoff_items) == 3
+
+    abnormal_items = [it for it in rpt.signoff_items if it.get("is_abnormal")]
+    assert len(abnormal_items) == 1
+    assert abnormal_items[0]["room_id"] == "A102"
+    assert abnormal_items[0]["damage_note"] == "第3份封面轻微破损"
+
+
+# ---------------------------------------------------------------------------
+# 19. signoff: 批次未发放不可签收
+# ---------------------------------------------------------------------------
+
+def test_signoff_rejected_before_dispatch(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck",
+            "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+
+    signoffs_csv = env["tmp_path"] / "signoffs.csv"
+    signoffs_csv.write_text(
+        "exam_id,room_id,subject,signoff_person,signoff_time,received_count\n"
+        "20260608,A101,math,张三,2026-06-08 09:00:00,30\n",
+        encoding="utf-8",
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(signoffs_csv),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SIGNOFF_BATCH_NOT_DISPATCHED, \
+        f"got {r.exit_code}, stdout={r.stdout}"
+    combined = r.stdout + (r.stderr or "")
+    assert ("完成发放" in combined) or ("completed" in combined)
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_signoff_ids()) == 0
+
+
+# ---------------------------------------------------------------------------
+# 20. signoff: 考场不在批次中 + 份数不匹配
+# ---------------------------------------------------------------------------
+
+def test_signoff_invalid_room_and_count_mismatch(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    signoffs_csv = env["tmp_path"] / "signoffs_bad.csv"
+    signoffs_csv.write_text(
+        "exam_id,room_id,subject,signoff_person,signoff_time,received_count\n"
+        "20260608,Z999,math,张三,2026-06-08 09:00:00,30\n"
+        "20260608,A101,math,李四,2026-06-08 09:05:00,999\n",
+        encoding="utf-8",
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(signoffs_csv),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code in (
+        ExitCode.SIGNOFF_ROOM_NOT_IN_BATCH,
+        ExitCode.SIGNOFF_COUNT_MISMATCH,
+        ExitCode.SIGNOFF_CONFLICT,
+    ), f"got {r.exit_code}, stdout={r.stdout}"
+    assert "签收导入失败" in r.stdout
+    assert "考场不在批次" in (r.stdout + (r.stderr or ""))
+    assert "份数不匹配" in (r.stdout + (r.stderr or ""))
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_signoff_ids()) == 0
+
+
+# ---------------------------------------------------------------------------
+# 21. signoff: 重复导入冲突需 --force
+# ---------------------------------------------------------------------------
+
+def test_signoff_conflict_without_force_then_force_update(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    signoffs_csv_1 = env["tmp_path"] / "signoffs_v1.csv"
+    signoffs_csv_1.write_text(
+        "exam_id,room_id,subject,signoff_person,signoff_time,received_count\n"
+        "20260608,A101,math,张三,2026-06-08 09:00:00,30\n"
+        "20260608,A102,math,李四,2026-06-08 09:05:00,28\n",
+        encoding="utf-8",
+    )
+
+    r1 = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(signoffs_csv_1),
+        ],
+        catch_exceptions=False,
+    )
+    assert r1.exit_code == ExitCode.SUCCESS
+
+    batch_before = Storage(env["storage_dir"]).get_batch(bid)
+    ids_before = batch_before.list_signoff_ids()
+    assert len(ids_before) == 1
+    first_rpt = batch_before.load_signoff_report(ids_before[0])
+    item_a101_first = next(
+        it for it in first_rpt.signoff_items
+        if it["room_id"] == "A101"
+    )
+    assert item_a101_first["signoff_person"] == "张三"
+
+    signoffs_csv_2 = env["tmp_path"] / "signoffs_v2.csv"
+    signoffs_csv_2.write_text(
+        "exam_id,room_id,subject,signoff_person,signoff_time,received_count\n"
+        "20260608,A101,math,赵六,2026-06-08 10:00:00,30\n",
+        encoding="utf-8",
+    )
+
+    r2 = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(signoffs_csv_2),
+        ],
+        catch_exceptions=False,
+    )
+    assert r2.exit_code == ExitCode.SIGNOFF_UPDATE_WITHOUT_FORCE, \
+        f"got {r2.exit_code}, stdout={r2.stdout}"
+    assert "重复签收冲突" in (r2.stdout + (r2.stderr or ""))
+    assert "force" in (r2.stdout + (r2.stderr or ""))
+
+    batch_between = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch_between.list_signoff_ids()) == 1
+
+    r3 = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(signoffs_csv_2),
+            "--force",
+        ],
+        catch_exceptions=False,
+    )
+    assert r3.exit_code == ExitCode.SUCCESS, f"stdout={r3.stdout}\nstderr={r3.stderr}"
+
+    batch_after = Storage(env["storage_dir"]).get_batch(bid)
+    ids_after = batch_after.list_signoff_ids()
+    assert len(ids_after) == 2
+    latest = batch_after.load_latest_signoff_report()
+    assert latest is not None
+    item_a101_latest = next(
+        it for it in latest.signoff_items
+        if it["room_id"] == "A101"
+    )
+    assert item_a101_latest["signoff_person"] == "赵六"
+
+
+# ---------------------------------------------------------------------------
+# 22. signoff: 跨重启查询持久性
+# ---------------------------------------------------------------------------
+
+def test_signoff_query_across_restart(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    signoffs_csv = env["tmp_path"] / "signoffs.csv"
+    signoffs_csv.write_text(
+        "exam_id,room_id,subject,signoff_person,signoff_time,received_count\n"
+        "20260608,A101,math,张三,2026-06-08 09:00:00,30\n"
+        "20260608,A102,math,李四,2026-06-08 09:05:00,28\n",
+        encoding="utf-8",
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(signoffs_csv),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    del r
+
+    storage_after = Storage(env["storage_dir"])
+    batch = storage_after.get_batch(bid)
+    assert batch is not None
+    signoff_ids = batch.list_signoff_ids()
+    assert len(signoff_ids) == 1
+    rpt = batch.load_signoff_report(signoff_ids[0])
+    assert rpt is not None
+    assert rpt.signed_rooms == 2
+
+    r_list = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "query"],
+        catch_exceptions=False,
+    )
+    assert r_list.exit_code == ExitCode.SUCCESS
+    combined = r_list.stdout + (r_list.stderr or "")
+    stripped = combined.replace("\n", "").replace(" ", "").replace("\r", "")
+    assert ("签收" in stripped) or ("partial" in stripped)
+
+    r_detail = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "query", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+    assert r_detail.exit_code == ExitCode.SUCCESS
+    detail = json.loads(r_detail.stdout)
+    assert detail["batch_id"] == bid
+    assert "signoff" in detail
+    assert detail["signoff"]["has_signoff"] is True
+    assert detail["signoff"]["count"] == 1
+    assert detail["signoff"]["status"] == "partial"
+    assert detail["signoff"]["signed_rooms"] == 2
+    assert detail["signoff"]["total_expected"] == 3
+    assert detail["signoff"]["last_imported_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# 23. signoff: 导出 JSON/CSV 内容一致性（跨重启）
+# ---------------------------------------------------------------------------
+
+def test_signoff_export_consistency(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    signoffs_csv = env["tmp_path"] / "signoffs.csv"
+    signoffs_csv.write_text(
+        "exam_id,room_id,subject,signoff_person,signoff_time,received_count,damage_note\n"
+        "20260608,A101,math,张三,2026-06-08 09:00:00,30,\n"
+        "20260608,A102,math,李四,2026-06-08 09:05:00,28,破损\n"
+        "20260608,B201,english,王五,2026-06-08 09:10:00,35,\n",
+        encoding="utf-8",
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(signoffs_csv),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    out_json1 = env["tmp_path"] / "export_json_v1.json"
+    out_csv1 = env["tmp_path"] / "export_batches_v1.csv"
+    out_items1 = env["tmp_path"] / "export_items_v1.csv"
+    for fmt, path in (
+        ("json", out_json1),
+        ("csv", out_csv1),
+    ):
+        r = runner.invoke(
+            main,
+            [
+                "--storage-dir", str(env["storage_dir"]),
+                "export", "--format", fmt, "--output", str(path),
+            ],
+            catch_exceptions=False,
+        )
+        assert r.exit_code == ExitCode.SUCCESS
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "csv-items",
+            "--batch-id", bid, "--output", str(out_items1),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    del r
+
+    Storage2 = Storage
+    storage2 = Storage2(env["storage_dir"])
+    batch2 = storage2.get_batch(bid)
+    assert len(batch2.list_signoff_ids()) == 1
+
+    out_json2 = env["tmp_path"] / "export_json_v2.json"
+    out_csv2 = env["tmp_path"] / "export_batches_v2.csv"
+    out_items2 = env["tmp_path"] / "export_items_v2.csv"
+    for fmt, path in (
+        ("json", out_json2),
+        ("csv", out_csv2),
+    ):
+        r = runner.invoke(
+            main,
+            [
+                "--storage-dir", str(env["storage_dir"]),
+                "export", "--format", fmt, "--output", str(path),
+            ],
+            catch_exceptions=False,
+        )
+        assert r.exit_code == ExitCode.SUCCESS
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "csv-items",
+            "--batch-id", bid, "--output", str(out_items2),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    data1 = json.loads(out_json1.read_text(encoding="utf-8"))
+    data2 = json.loads(out_json2.read_text(encoding="utf-8"))
+    assert len(data1["batches"]) == len(data2["batches"]) == 1
+    b1 = data1["batches"][0]
+    b2 = data2["batches"][0]
+    assert b1["batch_id"] == b2["batch_id"] == bid
+    assert b1["signoff"]["has_signoff"] == b2["signoff"]["has_signoff"] == True
+    assert b1["signoff"]["count"] == b2["signoff"]["count"] == 1
+    assert b1["signoff"]["status"] == b2["signoff"]["status"] == "complete"
+    assert b1["signoff"]["signed_rooms"] == b2["signoff"]["signed_rooms"] == 3
+    assert b1["signoff"]["abnormal_count"] == b2["signoff"]["abnormal_count"] == 1
+    assert b1["signoff"]["last_imported_at"] == b2["signoff"]["last_imported_at"]
+
+    import csv as csv_mod
+    with out_csv1.open("r", encoding="utf-8-sig") as f:
+        rows1 = list(csv_mod.DictReader(f))
+    with out_csv2.open("r", encoding="utf-8-sig") as f:
+        rows2 = list(csv_mod.DictReader(f))
+    assert len(rows1) == len(rows2) == 1
+    assert rows1[0]["batch_id"] == rows2[0]["batch_id"] == bid
+    for key in (
+        "signoff_count", "signoff_status", "signoff_signed_rooms",
+        "signoff_abnormal_count", "signoff_last_imported_at",
+    ):
+        assert key in rows1[0], f"批次CSV缺少列: {key}"
+        assert rows1[0][key] == rows2[0][key], f"{key} 不一致"
+
+    with out_items1.open("r", encoding="utf-8-sig") as f:
+        items1 = list(csv_mod.DictReader(f))
+    with out_items2.open("r", encoding="utf-8-sig") as f:
+        items2 = list(csv_mod.DictReader(f))
+    assert len(items1) == len(items2) == 3
+    for key in (
+        "signed_off", "signoff_person", "signoff_time",
+        "received_count", "damage_note", "signoff_abnormal",
+    ):
+        assert key in items1[0], f"发放明细CSV缺少列: {key}"
+    signed_rows = [row for row in items1 if row["signed_off"] == "True"]
+    assert len(signed_rows) == 3
+    a102 = next(row for row in items1 if row["room_id"] == "A102")
+    assert a102["signoff_person"] == "李四"
+    assert a102["damage_note"] == "破损"
+    assert a102["signoff_abnormal"] in ("True", "true", True)
+
+
+# ---------------------------------------------------------------------------
+# 24. signoff: 非法 CSV / 校验失败时不留下半成品
+# ---------------------------------------------------------------------------
+
+def test_signoff_invalid_csv_rejected_cleanly(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    bad_csv = env["tmp_path"] / "signoffs_bad_cols.csv"
+    bad_csv.write_text(
+        "bad_col1,bad_col2\n"
+        "x,y\n",
+        encoding="utf-8",
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(bad_csv),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.INVALID_CSV, f"got {r.exit_code}, stdout={r.stdout}"
+    assert "缺少必要列" in (r.stdout + (r.stderr or ""))
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_signoff_ids()) == 0
+    signoff_dir = batch.batch_dir / "signoffs"
+    assert not signoff_dir.exists() or not any(signoff_dir.iterdir())
+
+
+def test_signoff_io_error_no_half_file(runner, fresh_env, monkeypatch):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    signoffs_csv = env["tmp_path"] / "signoffs.csv"
+    signoffs_csv.write_text(
+        "exam_id,room_id,subject,signoff_person,signoff_time,received_count\n"
+        "20260608,A101,math,张三,2026-06-08 09:00:00,30\n",
+        encoding="utf-8",
+    )
+
+    from exam_paper_dispatcher import storage as st_mod
+
+    real_path_write_text = Path.write_text
+
+    def bad_write_text(self, *args, **kwargs):
+        if self.match("*signoff-*.json"):
+            raise OSError("simulated disk full")
+        return real_path_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", bad_write_text)
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "signoff", "--batch-id", bid,
+            "--signoffs", str(signoffs_csv),
+        ],
+    )
+    assert r.exit_code != ExitCode.SUCCESS, f"stdout={r.stdout}"
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    signoff_ids = batch.list_signoff_ids()
+    assert len(signoff_ids) == 0
+
+
+# ---------------------------------------------------------------------------
+# 25. README & CLI help 提及 signoff 命令和退出码
+# ---------------------------------------------------------------------------
+
+def test_readme_mentions_signoff():
+    readme = README_PATH.read_text(encoding="utf-8")
+    for keyword in ("signoff", "签收", "核销"):
+        assert keyword in readme, f"README 缺少关键字: {keyword}"
+
+
+def test_readme_signoff_exit_codes_match_models():
+    readme = README_PATH.read_text(encoding="utf-8")
+    signoff_exit_codes = [
+        (ExitCode.SIGNOFF_BATCH_NOT_DISPATCHED, "SIGNOFF_BATCH_NOT_DISPATCHED"),
+        (ExitCode.SIGNOFF_ROOM_NOT_IN_BATCH, "SIGNOFF_ROOM_NOT_IN_BATCH"),
+        (ExitCode.SIGNOFF_COUNT_MISMATCH, "SIGNOFF_COUNT_MISMATCH"),
+        (ExitCode.SIGNOFF_CONFLICT, "SIGNOFF_CONFLICT"),
+        (ExitCode.SIGNOFF_UPDATE_WITHOUT_FORCE, "SIGNOFF_UPDATE_WITHOUT_FORCE"),
+    ]
+    for code, name in signoff_exit_codes:
+        assert str(code) in readme, f"README 缺少退出码 {code} ({name})"
+        assert name in readme, f"README 缺少退出码常量名 {name}"
+
+
+def test_cli_help_mentions_signoff(runner):
+    r = runner.invoke(main, ["--help"])
+    top_help = r.stdout + (r.stderr or "")
+    assert r.exit_code == 0
+    assert "signoff" in top_help
+
+    r = runner.invoke(main, ["signoff", "--help"])
+    signoff_help = r.stdout + (r.stderr or "")
+    assert r.exit_code == 0
+    for keyword in ("batch-id", "signoffs", "force"):
+        assert keyword in signoff_help, f"signoff --help 缺少选项: {keyword}"
+

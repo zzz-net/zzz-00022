@@ -1,0 +1,22 @@
+{
+  "signoff-20260608-170846-174527": {
+    "signoff_id": "signoff-20260608-170846-174527",
+    "imported_at": "2026-06-08T17:08:46.242085",
+    "passed": true,
+    "total_rows": 3,
+    "valid_rows": 3,
+    "signed_rooms": 3,
+    "abnormal_count": 1,
+    "csv_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_ok.csv"
+  },
+  "signoff-20260608-170850-20596a": {
+    "signoff_id": "signoff-20260608-170850-20596a",
+    "imported_at": "2026-06-08T17:08:50.156412",
+    "passed": true,
+    "total_rows": 1,
+    "valid_rows": 1,
+    "signed_rooms": 1,
+    "abnormal_count": 0,
+    "csv_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\signoffs_update.csv"
+  }
+}

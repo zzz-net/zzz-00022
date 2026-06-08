@@ -1,0 +1,4 @@
+﻿exam_id,room_id,subject,signoff_person,signoff_time,received_count,damage_note,remark
+20260608,A101,math,张三,2026-06-08 09:00:00,30,,首轮签收
+20260608,A102,math,李四,2026-06-08 09:05:00,28,封面轻微破损,
+20260608,B201,english,王五,2026-06-08 09:10:00,35,,正常签收
