@@ -128,7 +128,7 @@ def _write_handle_audit(
     batch.append_incident_audit(entry)
 
 
-def _write_close_audit(batch: BatchState, ticket: IncidentTicket) -> None:
+def _write_close_audit(batch: BatchState, ticket: IncidentTicket, status_before: str) -> None:
     entry = IncidentAuditEntry(
         audit_id=gen_incident_audit_id(),
         batch_id=batch.batch_id,
@@ -139,7 +139,7 @@ def _write_close_audit(batch: BatchState, ticket: IncidentTicket) -> None:
         action=IncidentAuditAction.CLOSE,
         operator=ticket.closed_by or "",
         detail=f"close_reason={ticket.close_reason[:200]}",
-        status_before=IncidentStatus.OPEN.value,
+        status_before=status_before,
         status_after=IncidentStatus.CLOSED.value,
     )
     batch.append_incident_audit(entry)
@@ -313,6 +313,7 @@ def close_incident(
             details={"field": "operator"},
         )
 
+    status_before = ticket.status.value
     ticket.status = IncidentStatus.CLOSED
     ticket.closed_at = datetime.now().isoformat()
     ticket.closed_by = operator.strip()
@@ -320,7 +321,7 @@ def close_incident(
 
     try:
         batch.save_incident(ticket)
-        _write_close_audit(batch, ticket)
+        _write_close_audit(batch, ticket, status_before)
     except OSError as e:
         return ticket, IncidentError(
             f"保存异常处置单失败: {e}",

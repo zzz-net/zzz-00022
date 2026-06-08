@@ -3406,3 +3406,537 @@ def test_incident_handle_appends_audit_log(runner, fresh_env):
     ticket = batch.load_incident(ticket_id)
     assert len(ticket.handling_records) == 2
 
+
+# ---------------------------------------------------------------------------
+# 47. incident: 创建→处理→关闭 完整流程回归 + 四个出口一致性
+# ---------------------------------------------------------------------------
+
+def test_incident_full_lifecycle_and_four_exports(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    # ---- 1. 创建处置单（未处理 open）----
+    ticket_id = _create_sample_incident(
+        runner, env, bid,
+        room_id="A101", subject="math",
+        incident_type="package_damaged",
+        description="试卷包外封破损，需确认内容完整性",
+        operator="监考员甲",
+    )
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    ticket_after_create = batch.load_incident(ticket_id)
+    assert ticket_after_create.status.value == "open"
+    assert ticket_after_create.operator == "监考员甲"
+
+    # ---- 2. 处理（切换到 processing）----
+    r_handle = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "巡考员乙",
+            "--action", "现场核验试卷内容",
+            "--note", "试卷内容完整无缺页，仅外封轻微破损",
+            "--to-status", "processing",
+        ],
+        catch_exceptions=False,
+    )
+    assert r_handle.exit_code == ExitCode.SUCCESS, f"stdout={r_handle.stdout}"
+    assert "处理记录已追加" in r_handle.stdout
+
+    # ---- 3. 关闭（从 processing → closed）----
+    close_operator = "主考丙"
+    close_reason = "确认不影响使用，考生正常作答"
+    r_close = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", close_operator,
+            "--reason", close_reason,
+        ],
+        catch_exceptions=False,
+    )
+    assert r_close.exit_code == ExitCode.SUCCESS, f"stdout={r_close.stdout}"
+    assert "已关闭" in r_close.stdout
+
+    # ---- 加载最终状态 ----
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    ticket_final = batch.load_incident(ticket_id)
+    assert ticket_final.status.value == "closed"
+    assert ticket_final.closed_by == close_operator
+    assert ticket_final.close_reason == close_reason
+    assert ticket_final.closed_at is not None
+    assert len(ticket_final.handling_records) == 1
+
+    audit_log = batch.load_incident_audit_log()
+    assert len(audit_log) == 3  # create + handle + close
+
+    # ---- 出口 A: 查询详情（incident-list --ticket-id --format json）----
+    r_detail = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-list",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--format", "json",
+        ],
+        catch_exceptions=False,
+    )
+    assert r_detail.exit_code == ExitCode.SUCCESS
+    detail = json.loads(r_detail.stdout)
+    assert detail["ticket_id"] == ticket_id
+    assert detail["status"] == "closed"
+    assert detail["closed_by"] == close_operator
+    assert detail["close_reason"] == close_reason
+    assert detail["handling_count"] == 1
+    assert len(detail["handling_records"]) == 1
+    assert detail["handling_records"][0]["operator"] == "巡考员乙"
+    assert detail["handling_records"][0]["action"] == "现场核验试卷内容"
+    assert detail["operator"] == "监考员甲"  # 创建人
+
+    # ---- 出口 B: 列表汇总（query）----
+    r_query_list = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "query",
+        ],
+        catch_exceptions=False,
+    )
+    assert r_query_list.exit_code == ExitCode.SUCCESS
+    # 处置单摘要显示：未处理/处理中 + 已关闭 → 0/1
+    assert "0/1" in r_query_list.stdout
+
+    r_query_detail = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "query", "--batch-id", bid,
+        ],
+        catch_exceptions=False,
+    )
+    assert r_query_detail.exit_code == ExitCode.SUCCESS
+    query_data = json.loads(r_query_detail.stdout)
+    assert "incidents" in query_data
+    inc_summary = query_data["incidents"]
+    assert inc_summary["total"] == 1
+    assert inc_summary["count"] == 1
+    assert inc_summary["open_count"] == 0
+    assert inc_summary["open"] == 0
+    assert inc_summary["processing_count"] == 0
+    assert inc_summary["processing"] == 0
+    assert inc_summary["closed_count"] == 1
+    assert inc_summary["closed"] == 1
+    assert inc_summary["audit_count"] == 3
+    assert len(inc_summary["tickets"]) == 1
+    assert inc_summary["tickets"][0]["ticket_id"] == ticket_id
+    assert inc_summary["tickets"][0]["status"] == "closed"
+    assert inc_summary["tickets"][0]["handling_count"] == 1
+    assert "index" in inc_summary
+
+    # 审计日志嵌入 query 结果
+    assert "incident_audit_log" in query_data
+    assert len(query_data["incident_audit_log"]) == 3
+
+    # ---- 出口 C: JSON 导出 ----
+    out_json = env["tmp_path"] / "incident_export.json"
+    r_json = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "json",
+            "--output", str(out_json),
+        ],
+        catch_exceptions=False,
+    )
+    assert r_json.exit_code == ExitCode.SUCCESS
+    json_data = json.loads(out_json.read_text(encoding="utf-8"))
+    b_export = json_data["batches"][0]
+    assert b_export["incidents"]["total"] == 1
+    assert b_export["incidents"]["closed"] == 1
+    assert b_export["incidents"]["audit_count"] == 3
+    assert len(b_export["incident_audit_log"]) == 3
+
+    # ---- 出口 C: CSV 导出（batches）----
+    out_csv = env["tmp_path"] / "incident_batches.csv"
+    r_csv = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "csv",
+            "--output", str(out_csv),
+        ],
+        catch_exceptions=False,
+    )
+    assert r_csv.exit_code == ExitCode.SUCCESS
+    import csv as csv_mod
+    with out_csv.open("r", encoding="utf-8-sig") as f:
+        csv_rows = list(csv_mod.DictReader(f))
+    assert len(csv_rows) == 1
+    csv_row = csv_rows[0]
+    assert csv_row["batch_id"] == bid
+    for key in (
+        "incident_count", "incident_open_count", "incident_processing_count",
+        "incident_closed_count", "incident_audit_count",
+    ):
+        assert key in csv_row, f"CSV 缺少列: {key}"
+    assert csv_row["incident_count"] == "1"
+    assert csv_row["incident_open_count"] == "0"
+    assert csv_row["incident_processing_count"] == "0"
+    assert csv_row["incident_closed_count"] == "1"
+    assert csv_row["incident_audit_count"] == "3"
+
+    # ---- 出口 D: 审计包 ----
+    out_zip = env["tmp_path"] / "audit_incident_lifecycle.zip"
+    r_audit = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r_audit.exit_code == ExitCode.SUCCESS
+
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        names = set(zf.namelist())
+
+        # 必须包含的处置单相关文件
+        assert "incident_summary.json" in names
+        assert "incidents_index.json" in names
+        assert "incident_audit_log.jsonl" in names
+        ticket_file = f"incidents/{ticket_id}.json"
+        assert ticket_file in names
+
+        # 处置单汇总文件
+        summary = json.loads(zf.read("incident_summary.json").decode("utf-8"))
+        assert summary["total"] == 1
+        assert summary["closed"] == 1
+        assert summary["audit_count"] == 3
+
+        # 索引文件
+        index = json.loads(zf.read("incidents_index.json").decode("utf-8"))
+        assert ticket_id in index
+        assert index[ticket_id]["status"] == "closed"
+        assert index[ticket_id]["handling_count"] == 1
+
+        # 审计日志 jsonl（顺序和字段）
+        audit_raw = zf.read("incident_audit_log.jsonl").decode("utf-8")
+        audit_lines = [l for l in audit_raw.split("\n") if l.strip()]
+        assert len(audit_lines) == 3
+        audit_entries = [json.loads(l) for l in audit_lines]
+        actions = [e["action"] for e in audit_entries]
+        assert actions == ["create", "handle", "close"], f"审计日志顺序错误: {actions}"
+
+        # CREATE 审计字段
+        create_entry = audit_entries[0]
+        assert create_entry["action"] == "create"
+        assert create_entry["ticket_id"] == ticket_id
+        assert create_entry["operator"] == "监考员甲"
+        assert create_entry["status_before"] is None
+        assert create_entry["status_after"] == "open"
+        assert create_entry["exam_id"] == "20260608"
+        assert create_entry["room_id"] == "A101"
+        assert create_entry["subject"] == "math"
+        assert create_entry["audit_id"].startswith("incident-audit-")
+        assert "timestamp" in create_entry
+
+        # HANDLE 审计字段
+        handle_entry = audit_entries[1]
+        assert handle_entry["action"] == "handle"
+        assert handle_entry["ticket_id"] == ticket_id
+        assert handle_entry["operator"] == "巡考员乙"
+        assert handle_entry["status_before"] == "open"
+        assert handle_entry["status_after"] == "processing"
+        assert "现场核验" in handle_entry["detail"]
+
+        # CLOSE 审计字段（关键：旧状态应为 processing 而非 open）
+        close_entry = audit_entries[2]
+        assert close_entry["action"] == "close"
+        assert close_entry["ticket_id"] == ticket_id
+        assert close_entry["operator"] == close_operator
+        assert close_entry["status_before"] == "processing"  # 修复后应为 processing
+        assert close_entry["status_after"] == "closed"
+        assert close_reason in close_entry["detail"]
+
+        # manifest 计数
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["counts"]["incident_total"] == 1
+        assert manifest["counts"]["incident_open"] == 0
+        assert manifest["counts"]["incident_processing"] == 0
+        assert manifest["counts"]["incident_closed"] == 1
+        assert manifest["counts"]["incident_audit_total"] == 3
+
+        # README 包含处置单摘要
+        readme = zf.read("README.txt").decode("utf-8")
+        assert "异常处置单总数" in readme
+        assert "已关闭" in readme
+
+    # ---- 关闭后同考场可再次建新单 ----
+    ticket_id2 = _create_sample_incident(
+        runner, env, bid,
+        room_id="A101", subject="math",
+        incident_type="other",
+        description="同考场二次登记，用于验证关闭后可再次建单",
+        operator="监考员丁",
+    )
+    assert ticket_id2 != ticket_id
+
+    batch_after = Storage(env["storage_dir"]).get_batch(bid)
+    counts_after = batch_after.count_incidents()
+    assert counts_after["total"] == 2
+    assert counts_after["open"] == 1
+    assert counts_after["closed"] == 1
+    assert len(batch_after.load_incident_audit_log()) == 4  # 原3条 + 新create
+
+
+# ---------------------------------------------------------------------------
+# 48. incident: 跨重启一致性（汇总/索引/审计日志/归档清单）
+# ---------------------------------------------------------------------------
+
+def test_incident_across_restart_fields_and_order(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    # 建两张单：一张处理中，一张已关闭
+    t_open = _create_sample_incident(
+        runner, env, bid, room_id="A101", subject="math",
+        description="待处理单", operator="创建人A",
+    )
+    t_closed = _create_sample_incident(
+        runner, env, bid, room_id="B201", subject="english",
+        description="已关闭单", operator="创建人B",
+    )
+
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid, "--ticket-id", t_open,
+            "--operator", "处理人X", "--action", "初步跟进",
+            "--to-status", "processing",
+        ],
+        catch_exceptions=False,
+    )
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid, "--ticket-id", t_closed,
+            "--operator", "关闭人Y", "--reason", "已处置完毕",
+        ],
+        catch_exceptions=False,
+    )
+
+    # ---- 重启前：导出并记录 ----
+    out_json1 = env["tmp_path"] / "incident_r1.json"
+    out_csv1 = env["tmp_path"] / "incident_r1.csv"
+    out_zip1 = env["tmp_path"] / "audit_r1.zip"
+    for fmt, path in (("json", out_json1), ("csv", out_csv1)):
+        r = runner.invoke(
+            main,
+            ["--storage-dir", str(env["storage_dir"]),
+             "export", "--format", fmt, "--output", str(path)],
+            catch_exceptions=False,
+        )
+        assert r.exit_code == ExitCode.SUCCESS
+    r = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]),
+         "audit-pack", "--batch-id", bid, "--output", str(out_zip1)],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    r_list1 = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]),
+         "incident-list", "--batch-id", bid, "--format", "json"],
+        catch_exceptions=False,
+    )
+    assert r_list1.exit_code == ExitCode.SUCCESS
+    list_data1 = json.loads(r_list1.stdout)
+
+    r_query1 = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]),
+         "query", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+    assert r_query1.exit_code == ExitCode.SUCCESS
+    query_data1 = json.loads(r_query1.stdout)
+
+    # ---- 模拟"重启"：重建 Storage 对象 ----
+    Storage2 = Storage
+    storage_after = Storage2(env["storage_dir"])
+    batch_after = storage_after.get_batch(bid)
+    assert batch_after is not None
+
+    # 汇总计数不丢字段
+    counts_after = batch_after.count_incidents()
+    assert "total" in counts_after
+    assert "open" in counts_after
+    assert "processing" in counts_after
+    assert "closed" in counts_after
+    assert counts_after["total"] == 2
+    assert counts_after["open"] + counts_after["processing"] == 1
+    assert counts_after["closed"] == 1
+
+    # 索引不丢字段
+    idx_after = batch_after.load_incident_index()
+    assert t_open in idx_after
+    assert t_closed in idx_after
+    for tid in (t_open, t_closed):
+        for key in ("ticket_id", "created_at", "status", "exam_id",
+                    "room_id", "subject", "incident_type", "operator",
+                    "handling_count"):
+            assert key in idx_after[tid], f"索引缺少字段: {tid}.{key}"
+
+    # 审计日志：条数、顺序、字段
+    audit_after = batch_after.load_incident_audit_log()
+    assert len(audit_after) == 4  # create×2 + handle + close
+    action_seq = [a.action.value for a in audit_after]
+    assert action_seq == ["create", "create", "handle", "close"], \
+        f"审计日志顺序错乱: {action_seq}"
+    for entry in audit_after:
+        for key in ("audit_id", "batch_id", "ticket_id", "exam_id",
+                    "room_id", "subject", "action", "operator",
+                    "detail", "status_before", "status_after", "timestamp"):
+            assert hasattr(entry, key) or key in entry.model_dump(), \
+                f"审计日志条目缺少字段: {key}"
+
+    # ---- 重启后：再次导出并比对 ----
+    out_json2 = env["tmp_path"] / "incident_r2.json"
+    out_csv2 = env["tmp_path"] / "incident_r2.csv"
+    out_zip2 = env["tmp_path"] / "audit_r2.zip"
+    for fmt, path in (("json", out_json2), ("csv", out_csv2)):
+        r = runner.invoke(
+            main,
+            ["--storage-dir", str(env["storage_dir"]),
+             "export", "--format", fmt, "--output", str(path)],
+            catch_exceptions=False,
+        )
+        assert r.exit_code == ExitCode.SUCCESS
+    r = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]),
+         "audit-pack", "--batch-id", bid, "--output", str(out_zip2)],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    r_list2 = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]),
+         "incident-list", "--batch-id", bid, "--format", "json"],
+        catch_exceptions=False,
+    )
+    assert r_list2.exit_code == ExitCode.SUCCESS
+    list_data2 = json.loads(r_list2.stdout)
+
+    r_query2 = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]),
+         "query", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+    assert r_query2.exit_code == ExitCode.SUCCESS
+    query_data2 = json.loads(r_query2.stdout)
+
+    # 列表（ticket_id 顺序一致）
+    ids1 = [t["ticket_id"] for t in list_data1]
+    ids2 = [t["ticket_id"] for t in list_data2]
+    assert ids1 == ids2, "重启后处置单列表顺序不一致"
+    for t1, t2 in zip(list_data1, list_data2):
+        for key in ("ticket_id", "status", "handling_count",
+                    "operator", "room_id", "subject"):
+            assert t1[key] == t2[key], f"列表字段不一致: {key}"
+
+    # query 汇总字段一致
+    for key in ("total", "open", "processing", "closed", "audit_count"):
+        assert query_data1["incidents"][key] == query_data2["incidents"][key]
+
+    # query 审计日志顺序一致
+    audit_q1 = query_data1["incident_audit_log"]
+    audit_q2 = query_data2["incident_audit_log"]
+    assert len(audit_q1) == len(audit_q2)
+    for a1, a2 in zip(audit_q1, audit_q2):
+        for key in ("audit_id", "action", "operator", "ticket_id",
+                    "status_before", "status_after"):
+            assert a1[key] == a2[key], f"审计日志字段不一致: {key}"
+
+    # JSON 导出内容一致（忽略时间相关的顶层差异）
+    data_j1 = json.loads(out_json1.read_text(encoding="utf-8"))
+    data_j2 = json.loads(out_json2.read_text(encoding="utf-8"))
+    b_j1 = data_j1["batches"][0]
+    b_j2 = data_j2["batches"][0]
+    for key in ("count", "open", "processing", "closed", "audit_count"):
+        assert b_j1["incidents"][key] == b_j2["incidents"][key]
+    assert len(b_j1["incident_audit_log"]) == len(b_j2["incident_audit_log"])
+
+    # CSV 导出一致
+    import csv as csv_mod
+    with out_csv1.open("r", encoding="utf-8-sig") as f:
+        rows_csv1 = list(csv_mod.DictReader(f))
+    with out_csv2.open("r", encoding="utf-8-sig") as f:
+        rows_csv2 = list(csv_mod.DictReader(f))
+    assert len(rows_csv1) == len(rows_csv2) == 1
+    for key in ("incident_count", "incident_open_count",
+                "incident_processing_count", "incident_closed_count",
+                "incident_audit_count"):
+        assert rows_csv1[0][key] == rows_csv2[0][key]
+
+    # 审计包：归档清单文件列表一致
+    with zipfile.ZipFile(out_zip1, "r") as zf1, zipfile.ZipFile(out_zip2, "r") as zf2:
+        names1 = sorted(zf1.namelist())
+        names2 = sorted(zf2.namelist())
+        assert names1 == names2, "重启后审计包归档文件列表不一致"
+        for fname in names1:
+            if fname == "manifest.json":
+                m1 = json.loads(zf1.read(fname).decode("utf-8"))
+                m2 = json.loads(zf2.read(fname).decode("utf-8"))
+                for k in ("batch_id", "batch_status"):
+                    assert m1[k] == m2[k]
+                for k, v in m1["counts"].items():
+                    if k.startswith("incident_"):
+                        assert m2["counts"].get(k) == v, \
+                            f"manifest 计数不一致: {k}"
+            elif fname == "README.txt":
+                continue
+            elif fname.endswith(".jsonl"):
+                # 审计日志行顺序一致
+                lines1 = [l for l in zf1.read(fname).decode("utf-8").split("\n") if l.strip()]
+                lines2 = [l for l in zf2.read(fname).decode("utf-8").split("\n") if l.strip()]
+                assert len(lines1) == len(lines2)
+                for l1, l2 in zip(lines1, lines2):
+                    e1 = json.loads(l1)
+                    e2 = json.loads(l2)
+                    for k in ("audit_id", "action", "operator", "ticket_id",
+                              "status_before", "status_after"):
+                        assert e1[k] == e2[k]
+            elif fname in ("incident_summary.json", "incidents_index.json"):
+                d1 = json.loads(zf1.read(fname).decode("utf-8"))
+                d2 = json.loads(zf2.read(fname).decode("utf-8"))
+                assert d1 == d2, f"重启后 {fname} 内容不一致"
+            elif fname.startswith("incidents/") and fname.endswith(".json"):
+                t1 = json.loads(zf1.read(fname).decode("utf-8"))
+                t2 = json.loads(zf2.read(fname).decode("utf-8"))
+                for k in ("ticket_id", "status", "closed_by", "close_reason",
+                          "handling_count", "operator"):
+                    v1 = t1.get(k, t1.get("handling_records") and len(t1.get("handling_records")) if k == "handling_count" else None)
+                    v2 = t2.get(k, t2.get("handling_records") and len(t2.get("handling_records")) if k == "handling_count" else None)
+                    if k == "handling_count":
+                        assert len(t1["handling_records"]) == len(t2["handling_records"])
+                    else:
+                        assert v1 == v2, f"处置单文件字段不一致: {fname}.{k}"
+
