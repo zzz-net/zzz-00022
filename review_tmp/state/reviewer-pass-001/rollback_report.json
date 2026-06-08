@@ -1,0 +1,12 @@
+{
+  "batch_id": "reviewer-pass-001",
+  "saved_at": "2026-06-08T10:31:57.069654",
+  "results": [
+    {
+      "target_name": "review_R901_math",
+      "target_path": "review_tmp\\output\\review_R901_math.zip",
+      "action": "blocked",
+      "reason": "SHA256 不匹配（文件可能被替换）"
+    }
+  ]
+}

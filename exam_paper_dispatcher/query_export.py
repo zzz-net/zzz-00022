@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import csv
+import json
+from pathlib import Path
+from typing import Optional
+
+from .storage import BatchState, Storage
+
+
+def query_batch(storage: Storage, batch_id: str) -> Optional[dict]:
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        return None
+
+    result = batch.to_dict()
+
+    precheck = batch.load_precheck_report()
+    if precheck:
+        result["precheck"] = {
+            "passed": precheck.passed,
+            "total_rows": precheck.total_rows,
+            "valid_rows": precheck.valid_rows,
+            "missing_sources": precheck.missing_sources,
+            "target_conflicts": precheck.target_conflicts,
+            "invalid_subjects": precheck.invalid_subjects,
+            "invalid_versions": precheck.invalid_versions,
+            "checked_at": precheck.checked_at,
+        }
+
+    dispatch = batch.load_dispatch_report()
+    if dispatch:
+        result["dispatch"] = {
+            "saved_at": dispatch.get("saved_at"),
+            "items_summary": [
+                {
+                    "target_name": it.get("room_row", {}).get("target_name"),
+                    "room_id": it.get("room_row", {}).get("room_id"),
+                    "subject": it.get("room_row", {}).get("subject"),
+                    "dispatched": it.get("dispatched"),
+                    "target_path": it.get("target_path"),
+                    "target_sha256": it.get("target_sha256"),
+                    "error": it.get("error"),
+                }
+                for it in dispatch.get("items", [])
+            ],
+        }
+
+    rollback = batch.load_rollback_report()
+    if rollback:
+        result["rollback"] = {
+            "saved_at": rollback.get("saved_at"),
+            "results": rollback.get("results", []),
+        }
+
+    return result
+
+
+def list_batches(storage: Storage, status_filter: Optional[str] = None) -> list[dict]:
+    batches = storage.list_batches()
+    if status_filter:
+        batches = [b for b in batches if b.status.value == status_filter]
+    return [b.to_dict() for b in batches]
+
+
+def export_to_json(
+    storage: Storage,
+    output_path: str | Path,
+    batch_id: Optional[str] = None,
+) -> Path:
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    if batch_id:
+        data = query_batch(storage, batch_id)
+        if not data:
+            raise ValueError(f"批次不存在: {batch_id}")
+    else:
+        data = {
+            "batches": [query_batch(storage, b.batch_id) for b in storage.list_batches()],
+            "events_log": storage.get_events_log(),
+        }
+
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def export_batches_csv(
+    storage: Storage,
+    output_path: str | Path,
+) -> Path:
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    batches = storage.list_batches()
+    fieldnames = [
+        "batch_id", "status", "created_at", "updated_at",
+        "csv_path", "total_items", "success_count", "fail_count", "notes",
+    ]
+    with out.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for b in batches:
+            writer.writerow({k: b.to_dict().get(k, "") for k in fieldnames})
+    return out
+
+
+def export_items_csv(
+    storage: Storage,
+    batch_id: str,
+    output_path: str | Path,
+) -> Path:
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        raise ValueError(f"批次不存在: {batch_id}")
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    dispatch = batch.load_dispatch_report() or {}
+    items = dispatch.get("items", [])
+
+    fieldnames = [
+        "target_name", "exam_id", "room_id", "subject",
+        "students_count", "source_path", "target_path",
+        "dispatched", "source_sha256", "target_sha256", "error",
+    ]
+    with out.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for it in items:
+            rr = it.get("room_row", {})
+            writer.writerow({
+                "target_name": rr.get("target_name", ""),
+                "exam_id": rr.get("exam_id", ""),
+                "room_id": rr.get("room_id", ""),
+                "subject": rr.get("subject", ""),
+                "students_count": rr.get("students_count", ""),
+                "source_path": it.get("source_path", ""),
+                "target_path": it.get("target_path", ""),
+                "dispatched": it.get("dispatched", ""),
+                "source_sha256": it.get("source_sha256", ""),
+                "target_sha256": it.get("target_sha256", ""),
+                "error": it.get("error", ""),
+            })
+    return out

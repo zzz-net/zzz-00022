@@ -1,0 +1,2 @@
+﻿batch_id,status,created_at,updated_at,csv_path,total_items,success_count,fail_count,notes
+reviewer-pass-001,completed,2026-06-08T10:30:13.488147,2026-06-08T10:30:20.473484,review_tmp/reviewer_rooms.csv,2,2,0,发放完成: 成功 2/2

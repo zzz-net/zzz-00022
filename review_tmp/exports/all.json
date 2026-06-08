@@ -1,0 +1,49 @@
+{
+  "batches": [
+    {
+      "batch_id": "reviewer-pass-001",
+      "status": "completed",
+      "created_at": "2026-06-08T10:30:13.488147",
+      "updated_at": "2026-06-08T10:30:20.473484",
+      "csv_path": "review_tmp/reviewer_rooms.csv",
+      "total_items": 2,
+      "success_count": 2,
+      "fail_count": 0,
+      "notes": "发放完成: 成功 2/2",
+      "precheck": {
+        "passed": true,
+        "total_rows": 2,
+        "valid_rows": 2,
+        "missing_sources": [],
+        "target_conflicts": [],
+        "invalid_subjects": [],
+        "invalid_versions": [],
+        "checked_at": "2026-06-08T10:30:13.499346"
+      },
+      "dispatch": {
+        "saved_at": "2026-06-08T10:30:20.472026",
+        "items_summary": [
+          {
+            "target_name": "review_R901_math",
+            "room_id": "R901",
+            "subject": "math",
+            "dispatched": true,
+            "target_path": "review_tmp\\output\\review_R901_math.zip",
+            "target_sha256": "fc83c2fb6148d208ea6eac211b5e9ed4077d88d7a65ccd4b56919bfa5a99a5b0",
+            "error": null
+          },
+          {
+            "target_name": "review_R902_english",
+            "room_id": "R902",
+            "subject": "english",
+            "dispatched": true,
+            "target_path": "review_tmp\\output\\review_R902_english.zip",
+            "target_sha256": "6255d50be7ae4a1b98623890f0c5e4c8d9862e054a9337c786721428469351f8",
+            "error": null
+          }
+        ]
+      }
+    }
+  ],
+  "events_log": "[2026-06-08T10:30:13.489135] [reviewer-pass-001] 保存配置快照 (csv=review_tmp/reviewer_rooms.csv)\n[2026-06-08T10:30:13.500339] [reviewer-pass-001] 保存预检报告: 通过, 2 项\n[2026-06-08T10:30:13.501345] [reviewer-pass-001] 状态变更 -> dry_run_passed: 预检通过: 2/2 项\n[2026-06-08T10:30:20.469088] [reviewer-pass-001] 状态变更 -> dispatching: 开始发放 2 项\n[2026-06-08T10:30:20.472026] [reviewer-pass-001] 保存发放报告: 成功 2, 失败 0\n[2026-06-08T10:30:20.473484] [reviewer-pass-001] 状态变更 -> completed: 发放完成: 成功 2/2\n"
+}

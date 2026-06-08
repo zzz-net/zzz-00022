@@ -1,0 +1,21 @@
+{
+  "config": {
+    "source_root": "examples/papers",
+    "output_root": "review_tmp/output",
+    "default_subjects": [
+      "math",
+      "chinese",
+      "english"
+    ],
+    "subject_versions": {
+      "math": "2026-spring-v1",
+      "chinese": "2026-spring-v1",
+      "english": "2026-spring-v2"
+    },
+    "package_format": "zip",
+    "naming_pattern": "{exam_id}_{room_id}_{subject}_{version}",
+    "storage_dir": "review_tmp/state"
+  },
+  "csv_path": "review_tmp/reviewer_rooms.csv",
+  "saved_at": "2026-06-08T10:30:13.489135"
+}

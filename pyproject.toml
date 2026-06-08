@@ -1,0 +1,21 @@
+[project]
+name = "exam-paper-dispatcher"
+version = "1.0.0"
+description = "离线考试试卷包校验与发放 CLI"
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.1.0",
+    "pydantic>=2.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+exam-dispatch = "exam_paper_dispatcher.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["exam_paper_dispatcher*"]

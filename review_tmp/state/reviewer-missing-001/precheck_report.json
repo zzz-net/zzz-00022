@@ -1,0 +1,20 @@
+{
+  "batch_id": "reviewer-missing-001",
+  "total_rows": 1,
+  "valid_rows": 0,
+  "missing_sources": [
+    {
+      "line_no": 2,
+      "source_file": "missing_math.pdf",
+      "resolved_path": "examples\\papers\\missing_math.pdf",
+      "room_id": "R903",
+      "subject": "math"
+    }
+  ],
+  "target_conflicts": [],
+  "invalid_subjects": [],
+  "invalid_versions": [],
+  "items": [],
+  "passed": false,
+  "checked_at": "2026-06-08T10:31:11.852469"
+}
