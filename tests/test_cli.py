@@ -23,6 +23,7 @@ from exam_paper_dispatcher.storage import Storage
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO_ROOT / "examples"
+README_PATH = REPO_ROOT / "README.md"
 
 
 @pytest.fixture()
@@ -892,3 +893,64 @@ def test_audit_pack_no_half_file_on_error(runner, fresh_env, monkeypatch):
     for leftover in env["tmp_path"].glob("audit_*.tmp"):
         leftover.unlink()
         assert False, f"存在临时半截文件: {leftover}"
+
+
+# ---------------------------------------------------------------------------
+# 11. README 文档回归：确保审计命令和退出码不被文档遗漏
+# ---------------------------------------------------------------------------
+
+def test_readme_mentions_audit_commands_and_exit_codes():
+    assert README_PATH.exists(), "README.md 不存在"
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    required_strings = [
+        "audit-pack",
+        "audit-verify",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "AUDIT_OUTPUT_CONFLICT",
+        "AUDIT_OUTPUT_PERMISSION",
+        "AUDIT_MISSING_REPORT",
+        "AUDIT_INVALID_BATCH_STATUS",
+        "AUDIT_VERIFY_FAILED",
+    ]
+    missing = [s for s in required_strings if s not in readme]
+    assert not missing, f"README 缺少以下关键字段: {missing}"
+
+
+def test_readme_commands_match_cli_help(runner):
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    r = runner.invoke(main, ["audit-pack", "--help"])
+    help_text = r.stdout + (r.stderr or "")
+    assert r.exit_code == 0
+    for keyword in ("batch-id", "output", "force"):
+        assert keyword in help_text, f"audit-pack --help 缺少选项: {keyword}"
+
+    r = runner.invoke(main, ["audit-verify", "--help"])
+    help_text = r.stdout + (r.stderr or "")
+    assert r.exit_code == 0
+    assert "archive" in help_text, "audit-verify --help 缺少 --archive 选项"
+
+    r = runner.invoke(main, ["--help"])
+    top_help = r.stdout + (r.stderr or "")
+    assert "audit-pack" in top_help, "顶层 --help 未列出 audit-pack"
+    assert "audit-verify" in top_help, "顶层 --help 未列出 audit-verify"
+
+
+def test_readme_exit_codes_match_models():
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    audit_exit_codes = [
+        (ExitCode.AUDIT_OUTPUT_CONFLICT, "AUDIT_OUTPUT_CONFLICT"),
+        (ExitCode.AUDIT_OUTPUT_PERMISSION, "AUDIT_OUTPUT_PERMISSION"),
+        (ExitCode.AUDIT_MISSING_REPORT, "AUDIT_MISSING_REPORT"),
+        (ExitCode.AUDIT_INVALID_BATCH_STATUS, "AUDIT_INVALID_BATCH_STATUS"),
+        (ExitCode.AUDIT_VERIFY_FAILED, "AUDIT_VERIFY_FAILED"),
+    ]
+    for code, name in audit_exit_codes:
+        assert str(code) in readme, f"README 缺少退出码 {code} ({name})"
+        assert name in readme, f"README 缺少退出码常量名 {name}"

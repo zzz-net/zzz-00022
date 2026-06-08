@@ -9,6 +9,7 @@
 - **批次发放**：支持目录复制或 zip 打包两种模式
 - **状态持久化**：批次状态、配置快照、预检/发放/回滚报告落盘，重启不丢失
 - **安全回滚**：校验 SHA256，发现目标文件被替换时停止并给出证据
+- **交接审计包**：一键打包配置快照、各类报告、事件日志为离线 zip，内置 manifest + SHA256 防篡改校验
 - **数据导出**：支持 JSON、批次 CSV、发放明细 CSV
 
 ## 安装
@@ -77,11 +78,13 @@ exam_id,room_id,subject,students_count,source_file,target_name
 ## 命令速览
 
 ```
-exam-dispatch precheck  --config ... --rooms ...    # 第1步：预检
-exam-dispatch dispatch  --batch-id ...              # 第2步：发放
-exam-dispatch query     [--batch-id ...]            # 第3步：查询
-exam-dispatch rollback  --batch-id ... [--force]    # 第4步：回滚
-exam-dispatch export    --format ... --output ...   # 导出数据
+exam-dispatch precheck      --config ... --rooms ...     # 第1步：预检
+exam-dispatch dispatch      --batch-id ...               # 第2步：发放
+exam-dispatch query         [--batch-id ...]             # 第3步：查询
+exam-dispatch rollback      --batch-id ... [--force]     # 第4步：回滚
+exam-dispatch audit-pack    --batch-id ... --output ...  # 打包：生成交接审计包
+exam-dispatch audit-verify  --archive ...                # 验包：校验审计包完整性
+exam-dispatch export        --format ... --output ...    # 导出数据
 ```
 
 ---
@@ -182,6 +185,88 @@ python -m exam_paper_dispatcher.cli rollback --batch-id <批次ID> --force
 
 ---
 
+## 交接审计包 (audit-pack / audit-verify)
+
+考务人员在班组交接或离线归档时，可把某个批次（预检、发放、回滚任意阶段）完整打包成一个可离线校验的 zip，包含：配置快照、预检报告、发放明细、回滚记录、相关事件日志、一份人工可读 README 和一份 manifest。**重启 CLI 后从持久化状态重新生成，内容完全一致（除生成时间戳外）。**
+
+### 1. 打包 (audit-pack)
+
+```bash
+# 生成审计包（输出文件已存在时默认拒绝）
+python -m exam_paper_dispatcher.cli audit-pack \
+  --batch-id <批次ID> \
+  --output out/audit_batch-001.zip
+
+# 强制覆盖已存在的输出
+python -m exam_paper_dispatcher.cli audit-pack \
+  --batch-id <批次ID> \
+  --output out/audit_batch-001.zip \
+  --force
+```
+
+归档包含以下文件（按需出现，未到该阶段则不包含对应报告）：
+
+| 文件 | 说明 |
+|---|---|
+| `config_snapshot.json` | 配置 + CSV 路径 + 保存时间快照 |
+| `precheck_report.json` | 预检报告（含明细项） |
+| `dispatch_report.json` | 发放明细（含每个目标 SHA256），若已发放才会出现 |
+| `rollback_report.json` | 回滚记录（逐条动作和原因），若已回滚才会出现 |
+| `batch_events.log` | 该批次相关的事件日志（过滤自全局 events.log） |
+| `README.txt` | 人工可读摘要：批次号、状态、统计、文件清单、使用说明 |
+| `manifest.json` | 校验清单：schema 版本、批次号/状态、配置摘要 SHA256、各类明细数量、所有文件 SHA256 |
+
+**生成前检查**（失败时退出码、错误信息可被脚本识别，且不会留下半截 zip）：
+
+| 检查项 | 失败退出码 | 常见原因 |
+|---|---|---|
+| 批次存在 | `7` | batch-id 拼写错误 |
+| 批次状态非 pending | `23` | 批次刚创建但尚未执行预检 |
+| 必需报告（配置快照、预检报告）存在 | `22` | 存储目录被手工清理或 `--no-persist` |
+| 输出目录可写 | `21` | 目录权限不足或磁盘只读 |
+| 同名输出冲突 | `20` | 指定路径已有文件，未加 `--force` |
+
+- **退出码 `0`** 表示打包成功，zip 文件原子落盘。
+- 其他失败场景（磁盘写满、编码错误等）返回通用 `10`（IO_ERROR）。
+
+### 2. 验包 (audit-verify)
+
+```bash
+python -m exam_paper_dispatcher.cli audit-verify \
+  --archive out/audit_batch-001.zip
+```
+
+校验流程按以下顺序执行，任一失败都会把错误逐条打印到 stderr 并以退出码 `24` 结束：
+
+1. **文件存在且为合法 zip** —— 不是 zip 或已损坏直接失败
+2. **manifest.json 存在且可解析** —— 缺少 manifest 视为无效归档
+3. **每个文件 SHA256 与 manifest 匹配** —— 检测归档被第三方篡改或传输损坏
+4. **批次号一致** —— `precheck_report.json` 中的 `batch_id` 与 manifest 声明一致
+5. **明细数量一致** —— manifest 中的 `counts.precheck_items / dispatch_items / rollback_results` 与报告文件内实际条目数相等
+6. **配置摘要一致** —— `config_snapshot.json` 中 `config` 字段的规范排序哈希与 `manifest.config_digest_sha256` 一致
+
+校验通过时打印摘要表格（批次 ID、状态、明细数量、文件数等）并返回退出码 `0`；
+校验失败时 stderr 形如：
+
+```
+审计包校验失败: out/audit_broken.zip
+  - 文件 SHA256 不匹配: precheck_report.json (期望 24daeb3e4265..., 实际 1a58af24e5c3...)
+  - manifest 声明的文件在归档中缺失: config_snapshot.json
+```
+
+### 3. 失败排查速查表
+
+| 现象 / 退出码 | 可能原因 | 排查 / 解决 |
+|---|---|---|
+| `20` AUDIT_OUTPUT_CONFLICT | 输出路径已有 zip | 换一个文件名，或追加 `--force` 覆盖 |
+| `21` AUDIT_OUTPUT_PERMISSION | 输出目录不可写 | 检查目录权限、磁盘是否满、是否只读挂载 |
+| `22` AUDIT_MISSING_REPORT | 配置快照或预检报告缺失 | 确认 batch-id 正确；确认预检时使用了默认 `--persist` |
+| `23` AUDIT_INVALID_BATCH_STATUS | 批次处于 pending | 先跑一次 `precheck` 再打包 |
+| `24` AUDIT_VERIFY_FAILED | 归档被篡改或损坏 | 重新打包；怀疑传输问题时用 `audit-verify` 对照源端 |
+| `7` BATCH_NOT_FOUND | 批次不存在 | 检查 `--storage-dir` 是否指向正确；核对 batch-id 拼写 |
+
+---
+
 ## 数据导出
 
 重新启动 CLI 后仍可导出所有历史数据：
@@ -214,8 +299,13 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
 | 7 | BATCH_NOT_FOUND | 批次不存在或状态不符 |
 | 8 | BATCH_ALREADY_DONE | 批次已发放，需先回滚 |
 | 9 | ROLLBACK_TAMPERED | 回滚时发现文件被替换，已停止 |
-| 10 | IO_ERROR | 文件复制/删除等 I/O 错误 |
+| 10 | IO_ERROR | 文件复制/删除/打包等 I/O 错误 |
 | 11 | BATCH_ID_CONFLICT | 自定义批次 ID 已存在，拒绝复用覆盖 |
+| 20 | AUDIT_OUTPUT_CONFLICT | audit-pack 输出文件已存在（未加 --force） |
+| 21 | AUDIT_OUTPUT_PERMISSION | audit-pack 输出目录不可写或无法创建 |
+| 22 | AUDIT_MISSING_REPORT | audit-pack 缺少配置快照或预检报告 |
+| 23 | AUDIT_INVALID_BATCH_STATUS | audit-pack 目标批次仍为 pending，尚无报告可打包 |
+| 24 | AUDIT_VERIFY_FAILED | audit-verify 发现归档篡改、缺失或内容不一致 |
 | 99 | UNKNOWN_ERROR | 未预期的异常 |
 
 ---

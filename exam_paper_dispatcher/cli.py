@@ -345,10 +345,13 @@ def export(ctx: click.Context, fmt: str, batch_id: Optional[str], output_path: s
         ctx.exit(ExitCode.IO_ERROR)
 
 
-@main.command(help="生成交接审计包: 将批次配置、报告、日志打包为离线 zip")
-@click.option("--batch-id", required=True, help="批次 ID")
-@click.option("--output", "output_path", required=True, help="输出 zip 文件路径")
-@click.option("--force", is_flag=True, help="覆盖已存在的输出文件")
+@main.command(
+    help="生成交接审计包: 收集配置快照、预检报告、发放明细、回滚记录、"
+         "事件日志和 README，打包为可离线交接的 zip。重启 CLI 后可从持久化状态重新生成。"
+)
+@click.option("--batch-id", required=True, help="批次 ID（需已完成至少一次预检）")
+@click.option("--output", "output_path", required=True, help="输出 zip 文件路径，如 audit_batch-001.zip")
+@click.option("--force", is_flag=True, help="覆盖已存在的输出文件（默认拒绝同名输出）")
 @click.pass_context
 def audit_pack(ctx: click.Context, batch_id: str, output_path: str, force: bool):
     storage: Storage = ctx.obj["storage"]
@@ -363,7 +366,10 @@ def audit_pack(ctx: click.Context, batch_id: str, output_path: str, force: bool)
     ctx.exit(ExitCode.SUCCESS)
 
 
-@main.command(help="校验交接审计包: 检查 manifest、SHA256、批次号、配置摘要和明细数量")
+@main.command(
+    help="校验交接审计包: 读取归档并校验 manifest、每个文件的 SHA256、"
+         "批次号、配置摘要以及预检/发放/回滚明细数量，发现篡改或缺失时逐条指出差异。"
+)
 @click.option("--archive", "archive_path", required=True, help="审计包 zip 文件路径")
 @click.pass_context
 def audit_verify(ctx: click.Context, archive_path: str):
