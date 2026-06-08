@@ -4,13 +4,14 @@
 
 ## 特性
 
+- **导入预演 (preview)**：拿到考场 CSV 和配置 JSON 后，先汇总即将创建的批次、考场源文件、目标文件名、版本、人数校验和潜在冲突，不写出任何试卷包；预演结果按批次持久化，重启 CLI 后仍可 query 查到，export JSON/CSV 时自动附带预演摘要
 - **结构化预检 (dry-run)**：科目/版本/人数/源文件路径/目标文件名多重校验
 - **目标冲突检测**：复制前发现重复目标名立即报错终止
 - **批次发放**：支持目录复制或 zip 打包两种模式
-- **状态持久化**：批次状态、配置快照、预检/发放/回滚报告落盘，重启不丢失
+- **状态持久化**：批次状态、配置快照、预检/预演/发放/回滚报告落盘，重启不丢失
 - **安全回滚**：校验 SHA256，发现目标文件被替换时停止并给出证据
 - **交接审计包**：一键打包配置快照、各类报告、事件日志为离线 zip，内置 manifest + SHA256 防篡改校验
-- **数据导出**：支持 JSON、批次 CSV、发放明细 CSV
+- **数据导出**：支持 JSON、批次 CSV、发放明细 CSV（导出结果自动包含预演摘要）
 
 ## 安装
 
@@ -78,6 +79,7 @@ exam_id,room_id,subject,students_count,source_file,target_name
 ## 命令速览
 
 ```
+exam-dispatch preview       --config ... --rooms ...     # 第0步：导入预演（可选，不写出试卷包）
 exam-dispatch precheck      --config ... --rooms ...     # 第1步：预检
 exam-dispatch dispatch      --batch-id ...               # 第2步：发放
 exam-dispatch query         [--batch-id ...]             # 第3步：查询
@@ -86,6 +88,35 @@ exam-dispatch audit-pack    --batch-id ... --output ...  # 打包：生成交接
 exam-dispatch audit-verify  --archive ...                # 验包：校验审计包完整性
 exam-dispatch export        --format ... --output ...    # 导出数据
 ```
+
+---
+
+## 第 0 步：导入预演 (preview / 可选)
+
+正式预检前，可先跑一遍 `preview`，把即将创建的批次、每个考场会使用的源文件、目标文件名、版本、人数校验结果和潜在冲突全部汇总，但**不会写出任何试卷包**，方便先交给考务复核。
+
+```bash
+python -m exam_paper_dispatcher.cli preview \
+  --config examples/config.json \
+  --rooms examples/rooms.csv
+```
+
+- 输出：
+  - 汇总面板（通过/问题、各错误项计数）
+  - 预演明细表（考场、科目、版本、人数、源文件、源路径、目标文件名、目标路径）
+  - 潜在冲突表（目标路径重复、目标磁盘已存在同名文件）
+  - 缺失源文件 / 目标名冲突 / 非法科目 / 版本问题 表格
+  - 警告列表
+- 退出码：始终为 `0`（预演本身不阻断，问题通过表格与警告呈现）
+
+关键特性：
+
+- **不写出任何试卷包**：`output_root` 不会被创建或写入。
+- **同一 batch-id 重复预演不覆盖旧记录**：每次 `preview` 都会生成新的 `preview-*` ID，按时间顺序追加保存。
+- **持久化**：预演结果随批次落盘，重启 CLI 后 `query` 与 `export` 均能看到预演摘要。
+- **路径按规则解析**：`storage_dir`、`source_root`、`output_root` 按相对于配置文件所在目录解析并以绝对路径展示，便于复核。
+
+示例：先预演成功但磁盘已有同名输出 -> 预演会在潜在冲突中列出，考务据此决定是否清理、改名或继续预检/发放。
 
 ---
 
@@ -157,7 +188,7 @@ python -m exam_paper_dispatcher.cli query --batch-id <批次ID>
 ```
 
 列表显示：批次 ID、状态、创建/更新时间、项目数、成功/失败、备注。
-详情 JSON 包含：配置快照、预检报告、发放明细（含 SHA256）、回滚记录。
+详情 JSON 包含：配置快照、预检报告、预演摘要、发放明细（含 SHA256）、回滚记录。
 
 ---
 
@@ -272,10 +303,10 @@ python -m exam_paper_dispatcher.cli audit-verify \
 重新启动 CLI 后仍可导出所有历史数据：
 
 ```bash
-# 全部数据 JSON（批次 + 事件日志）
+# 全部数据 JSON（批次 + 事件日志，含预演摘要）
 python -m exam_paper_dispatcher.cli export --format json --output out/all.json
 
-# 批次摘要 CSV
+# 批次摘要 CSV（含预演次数字段）
 python -m exam_paper_dispatcher.cli export --format csv --output out/batches.csv
 
 # 单个批次的发放明细 CSV
@@ -312,17 +343,17 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
 
 ## 异常链路说明
 
-1. **缺失试卷文件 → dry-run 不落已完成批次**
+1. **缺失试卷文件 -> dry-run 不落已完成批次**
    - `precheck` 时如果发现 `missing_sources`，`report.passed = false`
    - 即使 `--persist`，批次状态只会写入 `failed`，绝不会出现 `completed`
    - 使用 `--no-persist` 时完全不写存储
 
-2. **两个清单行指向同一目标名 → 复制前报冲突**
+2. **两个清单行指向同一目标名 -> 复制前报冲突**
    - `precheck` 阶段对 `target_name` 做 group by
    - 任何重复都会进入 `target_conflicts`，预检直接失败（退出码 4）
    - 发放命令依赖已通过的预检报告，从源头阻止复制冲突文件
 
-3. **回滚时目标文件被别人替换 → 停止并说明**
+3. **回滚时目标文件被别人替换 -> 停止并说明**
    - 发放时为每个目标文件记录 SHA256
    - 回滚逐条计算实际 SHA256 与期望值比对
    - 不匹配时立即在该条目停止，打印路径 + 期望值 + 实际值
@@ -338,5 +369,8 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
     ├── config_snapshot.json     # 配置 + CSV 路径快照
     ├── precheck_report.json     # 预检报告
     ├── dispatch_report.json     # 发放明细（含 SHA256）
-    └── rollback_report.json     # 回滚明细
+    ├── rollback_report.json     # 回滚明细
+    └── previews/                # 导入预演报告目录（同一批次可多次预演，不覆盖）
+        ├── previews_index.json  # 预演索引
+        └── preview-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次预演完整报告
 ```

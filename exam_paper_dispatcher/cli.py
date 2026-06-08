@@ -31,6 +31,7 @@ from .audit_pack import (
     build_audit_pack,
     verify_audit_pack,
 )
+from .preview import run_import_preview
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
@@ -122,6 +123,114 @@ def _print_precheck_report(report, error: Optional[PreCheckError]):
         err_console.print(f"\n退出码: {error.exit_code}")
 
 
+def _print_preview_report(report):
+    title = "预演通过" if report.passed else "预演存在问题"
+    style = "green" if report.passed else "yellow"
+    p = Panel.fit(
+        f"批次: [bold]{report.batch_id}[/bold]\n"
+        f"预演ID: [bold]{report.preview_id}[/bold]\n"
+        f"源文件根目录: {report.source_root_resolved}\n"
+        f"输出目录: {report.output_root_resolved}\n"
+        f"总行数: {report.total_rows}  |  有效: {report.valid_rows}\n"
+        f"缺失源文件: {len(report.missing_sources)}  |  目标冲突: {len(report.target_conflicts)}\n"
+        f"非法科目: {len(report.invalid_subjects)}  |  版本问题: {len(report.invalid_versions)}\n"
+        f"潜在冲突: {len(report.potential_conflicts)}  |  警告: {len(report.warnings)}",
+        title=f"[{style}]{title}[/{style}]",
+        border_style=style,
+    )
+    console.print(p)
+
+    if report.warnings:
+        console.print("\n[bold yellow]警告列表:[/bold yellow]")
+        for w in report.warnings:
+            console.print(f"  - {w}")
+
+    if report.preview_items:
+        t = Table(title=f"预演明细 (共 {len(report.preview_items)} 项)", show_lines=True)
+        t.add_column("考场", style="bold")
+        t.add_column("科目")
+        t.add_column("版本")
+        t.add_column("人数")
+        t.add_column("源文件")
+        t.add_column("源路径")
+        t.add_column("目标文件名")
+        t.add_column("目标路径")
+        for it in report.preview_items:
+            src_exist_style = "green" if it["source_exists"] else "red"
+            tgt_exist_style = "yellow" if it["target_already_exists"] else "white"
+            t.add_row(
+                it["room_id"],
+                it["subject"],
+                it.get("version", ""),
+                str(it["students_count"]),
+                f"[{src_exist_style}]{it['source_file']}[/{src_exist_style}]",
+                it["source_path_resolved"],
+                it["target_name"],
+                f"[{tgt_exist_style}]{it['target_path_resolved']}[/{tgt_exist_style}]",
+            )
+        console.print(t)
+
+    if report.potential_conflicts:
+        t = Table(title="潜在冲突", show_lines=True)
+        t.add_column("冲突类型", style="red")
+        t.add_column("目标路径", style="yellow")
+        t.add_column("涉及考场/科目")
+        for c in report.potential_conflicts:
+            items_desc = ", ".join(
+                f"{r['room_id']}/{r['subject']}({r['target_name']})"
+                for r in c["items"]
+            )
+            t.add_row(c["type"], c["target_path"], items_desc)
+        console.print(t)
+
+    if report.missing_sources:
+        t = Table(title="缺失源文件", show_lines=True)
+        t.add_column("行号", style="dim")
+        t.add_column("考场")
+        t.add_column("科目")
+        t.add_column("源文件")
+        t.add_column("解析路径", style="red")
+        for m in report.missing_sources:
+            t.add_row(
+                str(m.get("line_no", "")),
+                m.get("room_id", ""),
+                m.get("subject", ""),
+                m.get("source_file", ""),
+                m.get("resolved_path", ""),
+            )
+        console.print(t)
+
+    if report.target_conflicts:
+        t = Table(title="目标文件名冲突", show_lines=True)
+        t.add_column("目标名", style="yellow")
+        t.add_column("涉及行")
+        for c in report.target_conflicts:
+            rows_desc = ", ".join(
+                f"行{r['line_no']}({r['room_id']}/{r['subject']})"
+                for r in c["rows"]
+            )
+            t.add_row(c["target_name"], rows_desc)
+        console.print(t)
+
+    if report.invalid_subjects:
+        t = Table(title="非法科目或人数")
+        t.add_column("行号")
+        t.add_column("科目")
+        t.add_column("说明")
+        for m in report.invalid_subjects:
+            t.add_row(str(m.get("line_no", "")), m.get("subject", ""), m.get("message", str(m.get("allowed", ""))))
+        console.print(t)
+
+    if report.invalid_versions:
+        t = Table(title="版本问题")
+        t.add_column("行号")
+        t.add_column("科目")
+        t.add_column("说明")
+        for m in report.invalid_versions:
+            t.add_row(str(m.get("line_no", "")), m.get("subject", ""), m.get("message", ""))
+        console.print(t)
+
+
 @click.group(help="离线考试试卷包校验与发放 CLI")
 @click.option("--storage-dir", default=".exam_dispatch_state", show_default=True,
               help="持久化存储目录")
@@ -159,6 +268,38 @@ def precheck(ctx: click.Context, config_path: str, csv_path: str,
 
     if error:
         ctx.exit(error.exit_code)
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(
+    help="导入预演: 汇总即将创建的批次、考场使用的源文件、目标文件名、版本、"
+         "人数校验结果和潜在冲突，但不写出任何试卷包。结果按批次保存，重启后仍可查询。"
+)
+@click.option("--config", "config_path", required=True, help="配置文件路径 (JSON)")
+@click.option("--rooms", "csv_path", required=True, help="考场 CSV 清单路径")
+@click.option("--batch-id", default=None, help="自定义批次 ID（默认自动生成；如已存在则追加新预演，不覆盖旧记录）")
+@click.pass_context
+def preview(ctx: click.Context, config_path: str, csv_path: str, batch_id: Optional[str]):
+    storage: Storage = ctx.obj["storage"]
+    config = _load_config(ctx, config_path)
+    rows = _load_rows(ctx, csv_path)
+
+    batch = storage.get_batch(batch_id) if batch_id else None
+    if batch is None:
+        try:
+            batch = storage.create_batch(batch_id)
+        except ValueError as e:
+            err_console.print(str(e))
+            ctx.exit(ExitCode.BATCH_ID_CONFLICT)
+        console.print(f"[info] 批次创建: [bold]{batch.batch_id}[/bold]")
+    else:
+        console.print(f"[info] 追加预演到已有批次: [bold]{batch.batch_id}[/bold]（已有 {len(batch.list_preview_ids())} 次预演记录）")
+
+    report = run_import_preview(storage, batch, config, rows, csv_path, config_path)
+    _print_preview_report(report)
+
+    if not report.passed:
+        console.print(f"\n[yellow]预演发现问题，详情见上方表格。[/yellow]")
     ctx.exit(ExitCode.SUCCESS)
 
 
@@ -254,6 +395,7 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
             st_style = {
                 "completed": "green",
                 "dry_run_passed": "cyan",
+                "preview": "bright_cyan",
                 "rolled_back": "yellow",
                 "failed": "red",
                 "pending": "dim",

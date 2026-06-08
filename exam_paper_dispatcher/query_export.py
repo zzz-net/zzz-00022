@@ -15,6 +15,36 @@ def query_batch(storage: Storage, batch_id: str) -> Optional[dict]:
 
     result = batch.to_dict()
 
+    preview_index = batch.load_preview_index()
+    preview_ids = batch.list_preview_ids()
+    if preview_ids:
+        previews_summary = []
+        for pid in preview_ids:
+            rpt = batch.load_preview_report(pid)
+            if rpt:
+                previews_summary.append({
+                    "preview_id": rpt.preview_id,
+                    "previewed_at": rpt.previewed_at,
+                    "passed": rpt.passed,
+                    "csv_path": rpt.csv_path,
+                    "source_root_resolved": rpt.source_root_resolved,
+                    "output_root_resolved": rpt.output_root_resolved,
+                    "total_rows": rpt.total_rows,
+                    "valid_rows": rpt.valid_rows,
+                    "missing_sources_count": len(rpt.missing_sources),
+                    "target_conflicts_count": len(rpt.target_conflicts),
+                    "invalid_subjects_count": len(rpt.invalid_subjects),
+                    "invalid_versions_count": len(rpt.invalid_versions),
+                    "potential_conflicts_count": len(rpt.potential_conflicts),
+                    "warnings": rpt.warnings,
+                    "preview_items_count": len(rpt.preview_items),
+                })
+        result["previews"] = {
+            "count": len(preview_ids),
+            "index": preview_index,
+            "summary": previews_summary,
+        }
+
     precheck = batch.load_precheck_report()
     if precheck:
         result["precheck"] = {
@@ -60,7 +90,15 @@ def list_batches(storage: Storage, status_filter: Optional[str] = None) -> list[
     batches = storage.list_batches()
     if status_filter:
         batches = [b for b in batches if b.status.value == status_filter]
-    return [b.to_dict() for b in batches]
+    result = []
+    for b in batches:
+        d = b.to_dict()
+        preview_ids = b.list_preview_ids()
+        d["preview_count"] = len(preview_ids)
+        if preview_ids:
+            d["latest_preview_at"] = preview_ids[-1]
+        result.append(d)
+    return result
 
 
 def export_to_json(
@@ -96,12 +134,17 @@ def export_batches_csv(
     fieldnames = [
         "batch_id", "status", "created_at", "updated_at",
         "csv_path", "total_items", "success_count", "fail_count", "notes",
+        "preview_count", "latest_preview_id",
     ]
     with out.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for b in batches:
-            writer.writerow({k: b.to_dict().get(k, "") for k in fieldnames})
+            row = {k: b.to_dict().get(k, "") for k in fieldnames}
+            preview_ids = b.list_preview_ids()
+            row["preview_count"] = len(preview_ids)
+            row["latest_preview_id"] = preview_ids[-1] if preview_ids else ""
+            writer.writerow(row)
     return out
 
 

@@ -1,0 +1,48 @@
+{
+  "preview_id": "preview-20260608-152138-d1e6d3",
+  "batch_id": "cfg-storage-batch",
+  "preview_type": "import_preview",
+  "config_snapshot": {
+    "source_root": "inputs/papers",
+    "output_root": "outputs",
+    "default_subjects": [
+      "math"
+    ],
+    "subject_versions": {
+      "math": "2026-spring-v1"
+    },
+    "package_format": "zip",
+    "naming_pattern": "{exam_id}_{room_id}_{subject}_{version}",
+    "storage_dir": "C:\\Users\\admin\\AppData\\Local\\Temp\\1\\review_zzz00022_more_iroy9rhk\\scenario_storage_cfg\\expected_state_from_config"
+  },
+  "csv_path": "C:\\Users\\admin\\AppData\\Local\\Temp\\1\\review_zzz00022_more_iroy9rhk\\scenario_storage_cfg\\rooms.csv",
+  "source_root_resolved": "C:\\Users\\admin\\AppData\\Local\\Temp\\1\\review_zzz00022_more_iroy9rhk\\scenario_storage_cfg\\inputs\\papers",
+  "output_root_resolved": "C:\\Users\\admin\\AppData\\Local\\Temp\\1\\review_zzz00022_more_iroy9rhk\\scenario_storage_cfg\\outputs",
+  "total_rows": 1,
+  "valid_rows": 1,
+  "missing_sources": [],
+  "target_conflicts": [],
+  "invalid_subjects": [],
+  "invalid_versions": [],
+  "preview_items": [
+    {
+      "exam_id": "20260609",
+      "room_id": "T201",
+      "subject": "math",
+      "version": "2026-spring-v1",
+      "students_count": 12,
+      "source_file": "paper_math_v1.pdf",
+      "source_path_resolved": "C:\\Users\\admin\\AppData\\Local\\Temp\\1\\review_zzz00022_more_iroy9rhk\\scenario_storage_cfg\\inputs\\papers\\paper_math_v1.pdf",
+      "source_exists": true,
+      "target_name": "20260609_T201_math",
+      "target_path_resolved": "C:\\Users\\admin\\AppData\\Local\\Temp\\1\\review_zzz00022_more_iroy9rhk\\scenario_storage_cfg\\outputs\\20260609_T201_math.zip",
+      "target_ext": ".zip",
+      "target_already_exists": false,
+      "source_sha256": "7b75338a36a99f71434b3eb0c8d18469da1a3067ae81f039323e50f54dcfa7e1"
+    }
+  ],
+  "potential_conflicts": [],
+  "warnings": [],
+  "passed": true,
+  "previewed_at": "2026-06-08T15:21:38.734583"
+}

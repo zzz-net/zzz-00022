@@ -1,0 +1,13 @@
+{
+  "cfg-storage-batch": {
+    "batch_id": "cfg-storage-batch",
+    "status": "preview",
+    "created_at": "2026-06-08T15:21:38.723344",
+    "updated_at": "2026-06-08T15:21:38.734583",
+    "csv_path": null,
+    "total_items": 0,
+    "success_count": 0,
+    "fail_count": 0,
+    "notes": "首次预演: preview-20260608-152138-d1e6d3"
+  }
+}

@@ -11,6 +11,7 @@ from .models import (
     DispatchConfig,
     DispatchItem,
     PreCheckReport,
+    PreviewReport,
     RoomRow,
 )
 
@@ -21,11 +22,18 @@ PRECHECK_REPORT_FILE = "precheck_report.json"
 DISPATCH_REPORT_FILE = "dispatch_report.json"
 ROLLBACK_REPORT_FILE = "rollback_report.json"
 EVENTS_LOG_FILE = "events.log"
+PREVIEWS_DIR = "previews"
+PREVIEW_INDEX_FILE = "previews_index.json"
 
 
 def gen_batch_id() -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"batch-{ts}-{uuid.uuid4().hex[:6]}"
+
+
+def gen_preview_id() -> str:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"preview-{ts}-{uuid.uuid4().hex[:6]}"
 
 
 class BatchState:
@@ -137,6 +145,68 @@ class BatchState:
             return None
         return json.loads(p.read_text(encoding="utf-8"))
 
+    def save_preview_report(self, report: PreviewReport) -> Path:
+        previews_dir = self.batch_dir / PREVIEWS_DIR
+        previews_dir.mkdir(parents=True, exist_ok=True)
+        target = previews_dir / f"{report.preview_id}.json"
+        target.write_text(
+            json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._update_preview_index(report)
+        self._log_event(f"保存预演报告: {report.preview_id}, passed={report.passed}")
+        self.save()
+        return target
+
+    def list_preview_ids(self) -> list[str]:
+        previews_dir = self.batch_dir / PREVIEWS_DIR
+        if not previews_dir.exists():
+            return []
+        files = sorted(
+            previews_dir.glob("preview-*.json"),
+            key=lambda p: (p.stat().st_mtime, p.name),
+        )
+        return [p.stem for p in files]
+
+    def load_preview_report(self, preview_id: str) -> Optional[PreviewReport]:
+        p = self.batch_dir / PREVIEWS_DIR / f"{preview_id}.json"
+        if not p.exists():
+            return None
+        return PreviewReport.model_validate_json(p.read_text(encoding="utf-8"))
+
+    def load_all_preview_reports(self) -> list[PreviewReport]:
+        reports = []
+        for pid in self.list_preview_ids():
+            rpt = self.load_preview_report(pid)
+            if rpt:
+                reports.append(rpt)
+        return reports
+
+    def _update_preview_index(self, report: PreviewReport):
+        idx_path = self.batch_dir / PREVIEWS_DIR / PREVIEW_INDEX_FILE
+        if idx_path.exists():
+            data = json.loads(idx_path.read_text(encoding="utf-8"))
+        else:
+            data = {}
+        data[report.preview_id] = {
+            "preview_id": report.preview_id,
+            "previewed_at": report.previewed_at,
+            "passed": report.passed,
+            "total_rows": report.total_rows,
+            "valid_rows": report.valid_rows,
+            "csv_path": report.csv_path,
+        }
+        idx_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_preview_index(self) -> dict:
+        idx_path = self.batch_dir / PREVIEWS_DIR / PREVIEW_INDEX_FILE
+        if not idx_path.exists():
+            return {}
+        return json.loads(idx_path.read_text(encoding="utf-8"))
+
     def _log_event(self, message: str):
         ts = datetime.now().isoformat()
         line = f"[{ts}] [{self.batch_id}] {message}\n"
@@ -243,3 +313,14 @@ class Storage:
         marker = f"[{batch_id}]"
         lines = [l for l in full_log.splitlines() if marker in l]
         return "\n".join(lines) + ("\n" if lines else "")
+
+    def list_all_previews(self) -> list[dict]:
+        results = []
+        for batch in self.list_batches():
+            idx = batch.load_preview_index()
+            for pid, meta in idx.items():
+                entry = {"batch_id": batch.batch_id}
+                entry.update(meta)
+                results.append(entry)
+        results.sort(key=lambda x: x.get("previewed_at", ""), reverse=True)
+        return results

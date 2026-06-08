@@ -34,6 +34,7 @@ class ExitCode:
 
 class BatchStatus(str, Enum):
     PENDING = "pending"
+    PREVIEW = "preview"
     DRY_RUN_PASSED = "dry_run_passed"
     DISPATCHING = "dispatching"
     COMPLETED = "completed"
@@ -123,6 +124,27 @@ class PreCheckReport(BaseModel):
     items: list[DispatchItem] = Field(default_factory=list)
     passed: bool = False
     checked_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+class PreviewReport(BaseModel):
+    preview_id: str
+    batch_id: str
+    preview_type: str = "import_preview"
+    config_snapshot: dict = Field(default_factory=dict)
+    csv_path: str = ""
+    source_root_resolved: str = ""
+    output_root_resolved: str = ""
+    total_rows: int = 0
+    valid_rows: int = 0
+    missing_sources: list[dict] = Field(default_factory=list)
+    target_conflicts: list[dict] = Field(default_factory=list)
+    invalid_subjects: list[dict] = Field(default_factory=list)
+    invalid_versions: list[dict] = Field(default_factory=list)
+    preview_items: list[dict] = Field(default_factory=list)
+    potential_conflicts: list[dict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    passed: bool = False
+    previewed_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
 def compute_sha256(path: str | Path, chunk_size: int = 8192) -> str:

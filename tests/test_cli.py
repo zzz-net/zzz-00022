@@ -954,3 +954,373 @@ def test_readme_exit_codes_match_models():
     for code, name in audit_exit_codes:
         assert str(code) in readme, f"README 缺少退出码 {code} ({name})"
         assert name in readme, f"README 缺少退出码常量名 {name}"
+
+
+# ---------------------------------------------------------------------------
+# 12. preview: 成功预演，不写出试卷包
+# ---------------------------------------------------------------------------
+
+def test_preview_success_no_output(runner, fresh_env):
+    env = fresh_env
+
+    assert not any(env["output_dir"].iterdir()), "预演前输出目录应为空"
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "preview",
+            "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert "预演" in r.stdout
+    assert "源文件根目录" in r.stdout
+    assert "输出目录" in r.stdout
+    assert "预演明细" in r.stdout
+    assert "预演通过" in r.stdout
+
+    assert not any(env["output_dir"].iterdir()), "预演后输出目录仍应为空"
+
+    storage = Storage(env["storage_dir"])
+    batches = storage.list_batches()
+    assert len(batches) == 1
+    batch = batches[0]
+    assert batch.status == BatchStatus.PREVIEW
+
+    preview_ids = batch.list_preview_ids()
+    assert len(preview_ids) == 1
+
+    rpt = batch.load_preview_report(preview_ids[0])
+    assert rpt is not None
+    assert rpt.batch_id == batch.batch_id
+    assert rpt.total_rows == 3
+    assert rpt.valid_rows == 3
+    assert len(rpt.missing_sources) == 0
+    assert len(rpt.target_conflicts) == 0
+    assert len(rpt.invalid_subjects) == 0
+    assert len(rpt.invalid_versions) == 0
+    assert len(rpt.preview_items) == 3
+    assert len(rpt.potential_conflicts) == 0
+    assert rpt.passed is True
+
+    for item in rpt.preview_items:
+        assert item["source_exists"] is True
+        assert item["target_already_exists"] is False
+        assert item["version"]
+        assert item["source_sha256"]
+
+
+# ---------------------------------------------------------------------------
+# 13. preview: 冲突预演（缺失源文件 + 目标名冲突）
+# ---------------------------------------------------------------------------
+
+def test_preview_with_conflicts(runner, fresh_env):
+    env = fresh_env
+    bad_rooms = env["tmp_path"] / "bad_preview.csv"
+    bad_rooms.write_text(
+        "exam_id,room_id,subject,students_count,source_file,target_name\n"
+        "20260608,A101,math,30,MISSING_FILE.pdf,20260608_A101_math\n"
+        "20260608,A102,math,28,paper_math_v1.pdf,DUPLICATE_TARGET\n"
+        "20260608,A103,math,25,paper_math_v1.pdf,DUPLICATE_TARGET\n"
+        "20260608,B201,physics,30,paper_math_v1.pdf,20260608_B201_physics\n",
+        encoding="utf-8",
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "preview",
+            "--config", str(env["config_path"]),
+            "--rooms", str(bad_rooms),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert "预演存在问题" in r.stdout
+    assert "缺失源文件" in r.stdout
+    assert "目标文件名冲突" in r.stdout
+    assert "DUPLICATE_TARGET" in r.stdout
+    assert "非法科目或人数" in r.stdout
+
+    storage = Storage(env["storage_dir"])
+    batch = storage.list_batches()[0]
+    rpt = batch.load_preview_report(batch.list_preview_ids()[0])
+    assert rpt.passed is False
+    assert len(rpt.missing_sources) == 1
+    assert len(rpt.target_conflicts) == 1
+    assert len(rpt.invalid_subjects) >= 1
+    assert len(rpt.warnings) >= 3
+
+
+# ---------------------------------------------------------------------------
+# 14. preview: 同一 batch-id 重复预演，不覆盖旧记录
+# ---------------------------------------------------------------------------
+
+def test_preview_same_batch_id_no_overwrite(runner, fresh_env):
+    env = fresh_env
+
+    r1 = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "preview",
+            "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+            "--batch-id", "preview-batch-001",
+        ],
+        catch_exceptions=False,
+    )
+    assert r1.exit_code == ExitCode.SUCCESS
+
+    batch1 = Storage(env["storage_dir"]).get_batch("preview-batch-001")
+    first_preview_ids = batch1.list_preview_ids()
+    assert len(first_preview_ids) == 1
+    first_rpt = batch1.load_preview_report(first_preview_ids[0])
+    first_created = batch1.created_at
+    first_previewed_at = first_rpt.previewed_at
+
+    other_rooms = env["tmp_path"] / "other_preview.csv"
+    other_rooms.write_text(
+        "exam_id,room_id,subject,students_count,source_file,target_name\n"
+        "20260609,Z999,math,10,paper_math_v1.pdf,20260609_Z999_math\n",
+        encoding="utf-8",
+    )
+
+    import time
+    time.sleep(0.05)
+
+    r2 = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "preview",
+            "--config", str(env["config_path"]),
+            "--rooms", str(other_rooms),
+            "--batch-id", "preview-batch-001",
+        ],
+        catch_exceptions=False,
+    )
+    assert r2.exit_code == ExitCode.SUCCESS, f"stdout={r2.stdout}\nstderr={r2.stderr}"
+    assert "追加预演" in r2.stdout
+
+    batch2 = Storage(env["storage_dir"]).get_batch("preview-batch-001")
+    second_preview_ids = batch2.list_preview_ids()
+    assert len(second_preview_ids) == 2
+    assert first_preview_ids[0] in second_preview_ids
+
+    first_still = batch2.load_preview_report(first_preview_ids[0])
+    assert first_still.total_rows == 3
+    assert first_still.previewed_at == first_previewed_at
+
+    all_reports = batch2.load_all_preview_reports()
+    assert len(all_reports) == 2
+    other_rpts = [r for r in all_reports if r.csv_path == str(other_rooms)]
+    assert len(other_rpts) == 1
+    assert other_rpts[0].total_rows == 1
+
+    assert batch2.created_at == first_created
+
+
+# ---------------------------------------------------------------------------
+# 15. preview: 跨重启查询（重建 Storage 后仍能查到预演记录）
+# ---------------------------------------------------------------------------
+
+def test_preview_query_across_restart(runner, fresh_env):
+    env = fresh_env
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "preview",
+            "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+            "--batch-id", "restart-preview",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    del r
+
+    storage_after = Storage(env["storage_dir"])
+    batch = storage_after.get_batch("restart-preview")
+    assert batch is not None
+    assert batch.status == BatchStatus.PREVIEW
+    preview_ids = batch.list_preview_ids()
+    assert len(preview_ids) == 1
+
+    rpt = batch.load_preview_report(preview_ids[0])
+    assert rpt is not None
+    assert rpt.total_rows == 3
+    assert rpt.valid_rows == 3
+    assert len(rpt.preview_items) == 3
+
+    r_list = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "query"],
+        catch_exceptions=False,
+    )
+    assert r_list.exit_code == ExitCode.SUCCESS
+    assert "preview" in r_list.stdout
+    listed_batches = storage_after.list_batches()
+    assert any(b.batch_id == "restart-preview" for b in listed_batches)
+
+    r_detail = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "query", "--batch-id", "restart-preview"],
+        catch_exceptions=False,
+    )
+    assert r_detail.exit_code == ExitCode.SUCCESS
+    detail = json.loads(r_detail.stdout)
+    assert detail["batch_id"] == "restart-preview"
+    assert "previews" in detail
+    assert detail["previews"]["count"] == 1
+    assert len(detail["previews"]["summary"]) == 1
+    assert detail["previews"]["summary"][0]["total_rows"] == 3
+    assert detail["previews"]["summary"][0]["preview_items_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# 16. preview: 导出 JSON/CSV 内容包含预演摘要且跨重启一致
+# ---------------------------------------------------------------------------
+
+def test_preview_export_consistency(runner, fresh_env):
+    env = fresh_env
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "preview",
+            "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+            "--batch-id", "export-preview",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    other_rooms = env["tmp_path"] / "extra.csv"
+    other_rooms.write_text(
+        "exam_id,room_id,subject,students_count,source_file,target_name\n"
+        "20260610,C301,english,20,paper_english_v2.pdf,20260610_C301_english\n",
+        encoding="utf-8",
+    )
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "preview",
+            "--config", str(env["config_path"]),
+            "--rooms", str(other_rooms),
+            "--batch-id", "export-preview",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    out_json1 = env["tmp_path"] / "export_v1.json"
+    out_csv1 = env["tmp_path"] / "batches_v1.csv"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "json", "--output", str(out_json1),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "csv", "--output", str(out_csv1),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    del r
+
+    Storage2 = Storage
+    storage2 = Storage2(env["storage_dir"])
+    batch2 = storage2.get_batch("export-preview")
+    assert len(batch2.list_preview_ids()) == 2
+
+    out_json2 = env["tmp_path"] / "export_v2.json"
+    out_csv2 = env["tmp_path"] / "batches_v2.csv"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "json", "--output", str(out_json2),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "csv", "--output", str(out_csv2),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    data1 = json.loads(out_json1.read_text(encoding="utf-8"))
+    data2 = json.loads(out_json2.read_text(encoding="utf-8"))
+    assert len(data1["batches"]) == len(data2["batches"]) == 1
+    b1 = data1["batches"][0]
+    b2 = data2["batches"][0]
+    assert b1["batch_id"] == b2["batch_id"] == "export-preview"
+    assert b1["previews"]["count"] == b2["previews"]["count"] == 2
+    assert len(b1["previews"]["summary"]) == len(b2["previews"]["summary"]) == 2
+    for i in range(2):
+        for key in (
+            "preview_id", "total_rows", "valid_rows",
+            "missing_sources_count", "target_conflicts_count",
+            "invalid_subjects_count", "invalid_versions_count",
+            "potential_conflicts_count",
+        ):
+            assert b1["previews"]["summary"][i][key] == b2["previews"]["summary"][i][key]
+
+    import csv as csv_mod
+    with out_csv1.open("r", encoding="utf-8-sig") as f:
+        rows1 = list(csv_mod.DictReader(f))
+    with out_csv2.open("r", encoding="utf-8-sig") as f:
+        rows2 = list(csv_mod.DictReader(f))
+    assert len(rows1) == len(rows2) == 1
+    assert rows1[0]["batch_id"] == rows2[0]["batch_id"] == "export-preview"
+    assert rows1[0]["preview_count"] == rows2[0]["preview_count"] == "2"
+    assert "preview_count" in rows1[0]
+    assert "latest_preview_id" in rows1[0]
+    assert rows1[0]["latest_preview_id"] == rows2[0]["latest_preview_id"]
+
+
+# ---------------------------------------------------------------------------
+# 17. README & CLI help 提及 preview 命令
+# ---------------------------------------------------------------------------
+
+def test_readme_mentions_preview():
+    readme = README_PATH.read_text(encoding="utf-8")
+    for keyword in ("preview", "导入预演", "预演"):
+        assert keyword in readme, f"README 缺少关键字: {keyword}"
+
+
+def test_cli_help_mentions_preview(runner):
+    r = runner.invoke(main, ["--help"])
+    top_help = r.stdout + (r.stderr or "")
+    assert r.exit_code == 0
+    assert "preview" in top_help
+
+    r = runner.invoke(main, ["preview", "--help"])
+    preview_help = r.stdout + (r.stderr or "")
+    assert r.exit_code == 0
+    for keyword in ("config", "rooms", "batch-id"):
+        assert keyword in preview_help, f"preview --help 缺少选项: {keyword}"
