@@ -140,7 +140,11 @@ def precheck(ctx: click.Context, config_path: str, csv_path: str,
     config = _load_config(ctx, config_path)
     rows = _load_rows(ctx, csv_path)
 
-    batch = storage.create_batch(batch_id)
+    try:
+        batch = storage.create_batch(batch_id)
+    except ValueError as e:
+        err_console.print(str(e))
+        ctx.exit(ExitCode.BATCH_ID_CONFLICT)
     if persist:
         batch.save_config_snapshot(config, csv_path)
         console.print(f"[info] 批次创建: [bold]{batch.batch_id}[/bold]")
@@ -329,6 +333,8 @@ def export(ctx: click.Context, fmt: str, batch_id: Optional[str], output_path: s
     except ValueError as e:
         err_console.print(str(e))
         ctx.exit(ExitCode.BATCH_NOT_FOUND)
+    except click.exceptions.Exit:
+        raise
     except Exception as e:
         err_console.print(f"导出失败: {e}")
         ctx.exit(ExitCode.IO_ERROR)
@@ -336,7 +342,9 @@ def export(ctx: click.Context, fmt: str, batch_id: Optional[str], output_path: s
 
 def run():
     try:
-        main(standalone_mode=False)
+        rv = main(standalone_mode=False)
+        if isinstance(rv, int) and rv != 0:
+            sys.exit(rv)
     except click.exceptions.Exit as e:
         sys.exit(e.exit_code)
     except Exception as e:

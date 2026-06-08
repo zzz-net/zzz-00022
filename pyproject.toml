@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-exam-dispatch = "exam_paper_dispatcher.cli:main"
+exam-dispatch = "exam_paper_dispatcher.cli:run"
 
 [build-system]
 requires = ["setuptools>=61.0"]

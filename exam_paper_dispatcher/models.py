@@ -23,6 +23,7 @@ class ExitCode:
     BATCH_ALREADY_DONE = 8
     ROLLBACK_TAMPERED = 9
     IO_ERROR = 10
+    BATCH_ID_CONFLICT = 11
     UNKNOWN_ERROR = 99
 
 

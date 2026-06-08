@@ -206,6 +206,11 @@ class Storage:
         )
 
     def create_batch(self, batch_id: Optional[str] = None) -> BatchState:
+        if batch_id is not None and (batch_id in self._batches or (self.storage_dir / batch_id).exists()):
+            raise ValueError(
+                f"批次 ID 已存在，禁止复用覆盖: {batch_id}。"
+                "如需继续请更换 batch-id，或先清理 .exam_dispatch_state/ 中对应批次目录。"
+            )
         bs = BatchState.create(self.storage_dir, batch_id)
         self._batches[bs.batch_id] = bs
         self._write_index()
