@@ -42,6 +42,11 @@ class ExitCode:
     SIGNOFF_REVOKE_NOT_SIGNED = 29
     SIGNOFF_AUDIT_OUTPUT_ERROR = 30
     SIGNOFF_AUDIT_MISSING_REASON = 31
+    INCIDENT_CONFLICT = 32
+    INCIDENT_NOT_FOUND = 33
+    INCIDENT_ALREADY_CLOSED = 34
+    INCIDENT_INVALID_FIELD = 35
+    INCIDENT_AUDIT_OUTPUT_ERROR = 36
     UNKNOWN_ERROR = 99
 
 
@@ -255,4 +260,67 @@ class SignoffAuditEntry(BaseModel):
 def gen_signoff_audit_id() -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"signoff-audit-{ts}-{uuid.uuid4().hex[:6]}"
+
+
+class IncidentStatus(str, Enum):
+    OPEN = "open"
+    PROCESSING = "processing"
+    CLOSED = "closed"
+
+
+class IncidentType(str, Enum):
+    PACKAGE_DAMAGED = "package_damaged"
+    WRONG_PACKAGE = "wrong_package"
+    ROOM_CHANGE = "room_change"
+    OTHER = "other"
+
+
+INCIDENT_TYPE_LABELS = {
+    IncidentType.PACKAGE_DAMAGED: "试卷包损坏",
+    IncidentType.WRONG_PACKAGE: "错装/错发",
+    IncidentType.ROOM_CHANGE: "临时换考场",
+    IncidentType.OTHER: "其他问题",
+}
+
+
+class IncidentHandlingRecord(BaseModel):
+    record_id: str
+    ticket_id: str
+    operator: str
+    action: str
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    note: str = ""
+
+
+class IncidentTicket(BaseModel):
+    ticket_id: str
+    batch_id: str
+    exam_id: str
+    room_id: str
+    subject: str
+    incident_type: IncidentType
+    description: str
+    operator: str
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    status: IncidentStatus = IncidentStatus.OPEN
+    closed_at: Optional[str] = None
+    closed_by: Optional[str] = None
+    close_reason: str = ""
+    attachment_paths: list[str] = Field(default_factory=list)
+    handling_records: list[IncidentHandlingRecord] = Field(default_factory=list)
+
+
+INCIDENT_AUDIT_LOG_FILE = "incident_audit_log.jsonl"
+INCIDENTS_DIR = "incidents"
+INCIDENT_INDEX_FILE = "incidents_index.json"
+
+
+def gen_incident_id() -> str:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"incident-{ts}-{uuid.uuid4().hex[:6]}"
+
+
+def gen_incident_handling_id() -> str:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"incident-handling-{ts}-{uuid.uuid4().hex[:6]}"
 

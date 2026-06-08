@@ -2588,3 +2588,611 @@ def test_cli_help_mentions_correct_revoke(runner):
     for kw in ("batch-id", "exam-id", "room-id", "subject", "format"):
         assert kw in help_text, f"signoff-history --help 缺少选项: {kw}"
 
+
+# ===========================================================================
+# 异常处置单 (incident-*) 测试
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 35. incident-create: 正常登记处置单
+# ---------------------------------------------------------------------------
+
+def _create_sample_incident(runner, env, bid, *, room_id="A101", subject="math",
+                            incident_type="package_damaged", description="测试说明",
+                            operator="张老师", attachments=None):
+    """辅助函数：创建一个异常处置单，返回 ticket_id。"""
+    args = [
+        "--storage-dir", str(env["storage_dir"]),
+        "incident-create",
+        "--batch-id", bid,
+        "--exam-id", "20260608",
+        "--room-id", room_id,
+        "--subject", subject,
+        "--type", incident_type,
+        "--description", description,
+        "--operator", operator,
+    ]
+    if attachments:
+        for a in attachments:
+            args.extend(["--attachment", str(a)])
+    r = runner.invoke(main, args, catch_exceptions=False)
+    assert r.exit_code == ExitCode.SUCCESS, f"incident-create failed, stdout={r.stdout}\nstderr={r.stderr}"
+    assert "处置单创建成功" in r.stdout
+    import re
+    m = re.search(r"incident-\d{8}-\d{6}-[a-f0-9]{6}", r.stdout)
+    assert m, f"未在输出中找到处置单 ID, stdout={r.stdout}"
+    return m.group(0)
+
+
+def test_incident_create_normal(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    att = env["tmp_path"] / "photo1.jpg"
+    att.write_bytes(b"fake image data")
+
+    ticket_id = _create_sample_incident(runner, env, bid, attachments=[att])
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_incident_ids()) == 1
+    ticket = batch.load_incident(ticket_id)
+    assert ticket is not None
+    assert ticket.ticket_id == ticket_id
+    assert ticket.batch_id == bid
+    assert ticket.room_id == "A101"
+    assert ticket.subject == "math"
+    assert ticket.incident_type.value == "package_damaged"
+    assert ticket.description == "测试说明"
+    assert ticket.operator == "张老师"
+    assert ticket.status.value == "open"
+    assert len(ticket.attachment_paths) == 1
+    assert len(ticket.handling_records) == 0
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-list", "--batch-id", bid,
+            "--format", "json",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    data = json.loads(r.stdout)
+    assert isinstance(data, list)
+    assert len(data) == 1
+    assert data[0]["ticket_id"] == ticket_id
+    assert data[0]["status"] == "open"
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-list", "--batch-id", bid,
+            "--ticket-id", ticket_id, "--format", "json",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    detail = json.loads(r.stdout)
+    assert detail["ticket_id"] == ticket_id
+    assert "handling_records" in detail
+
+
+# ---------------------------------------------------------------------------
+# 36. incident-create: 重复创建冲突检测
+# ---------------------------------------------------------------------------
+
+def test_incident_create_conflict(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    _create_sample_incident(runner, env, bid)
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-create",
+            "--batch-id", bid,
+            "--exam-id", "20260608",
+            "--room-id", "A101",
+            "--subject", "math",
+            "--type", "wrong_package",
+            "--description", "另一个问题",
+            "--operator", "李老师",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.INCIDENT_CONFLICT, f"got {r.exit_code}, stdout={r.stdout}"
+    output = r.stdout + (r.stderr or "")
+    assert "冲突" in output or "未关闭" in output
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_incident_ids()) == 1
+
+
+# ---------------------------------------------------------------------------
+# 37. incident-handle: 追加处理记录
+# ---------------------------------------------------------------------------
+
+def test_incident_handle_and_close(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+    ticket_id = _create_sample_incident(runner, env, bid)
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "李主任",
+            "--action", "联系印刷厂重印",
+            "--note", "预计30分钟送达",
+            "--to-status", "processing",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS, f"stdout={r.stdout}\nstderr={r.stderr}"
+    output = r.stdout + (r.stderr or "")
+    assert "处理记录已追加" in output
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    ticket = batch.load_incident(ticket_id)
+    assert ticket.status.value == "processing"
+    assert len(ticket.handling_records) == 1
+    assert ticket.handling_records[0].operator == "李主任"
+    assert ticket.handling_records[0].action == "联系印刷厂重印"
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "李主任",
+            "--action", "重印件已送达并更换",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    ticket = batch.load_incident(ticket_id)
+    assert ticket.status.value == "processing"
+    assert len(ticket.handling_records) == 2
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "主考",
+            "--reason", "问题已解决",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert "处置单已关闭" in r.stdout
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    ticket = batch.load_incident(ticket_id)
+    assert ticket.status.value == "closed"
+    assert ticket.closed_by == "主考"
+    assert ticket.close_reason == "问题已解决"
+    assert ticket.closed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# 38. 关闭后再登记（同一考场允许创建新工单）
+# ---------------------------------------------------------------------------
+
+def test_incident_create_after_close(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+    ticket_id1 = _create_sample_incident(runner, env, bid)
+
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id1,
+            "--operator", "主考",
+            "--reason", "问题已解决",
+        ],
+        catch_exceptions=False,
+    )
+
+    ticket_id2 = _create_sample_incident(runner, env, bid)
+    assert ticket_id1 != ticket_id2
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_incident_ids()) == 2
+
+
+# ---------------------------------------------------------------------------
+# 39. incident-handle/close: 已关闭的工单不能操作
+# ---------------------------------------------------------------------------
+
+def test_incident_closed_immutable(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+    ticket_id = _create_sample_incident(runner, env, bid)
+
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "主考",
+            "--reason", "已解决",
+        ],
+        catch_exceptions=False,
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "李主任",
+            "--action", "尝试追加",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.INCIDENT_ALREADY_CLOSED, f"got {r.exit_code}, stdout={r.stdout}"
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "主考",
+            "--reason", "再次关闭",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.INCIDENT_ALREADY_CLOSED
+
+
+# ---------------------------------------------------------------------------
+# 40. incident-create: 附件路径无效时拒绝创建
+# ---------------------------------------------------------------------------
+
+def test_incident_create_invalid_attachment(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-create",
+            "--batch-id", bid,
+            "--exam-id", "20260608",
+            "--room-id", "A101",
+            "--subject", "math",
+            "--type", "package_damaged",
+            "--description", "有附件路径无效",
+            "--operator", "张老师",
+            "--attachment", "/definitely/does/not/exist.jpg",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.INCIDENT_INVALID_FIELD, f"got {r.exit_code}, stdout={r.stdout}"
+    output = r.stdout + (r.stderr or "")
+    assert "附件" in output or "attachment" in output.lower()
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_incident_ids()) == 0
+    incident_dir = batch.batch_dir / "incidents"
+    assert not incident_dir.exists() or not any(incident_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# 41. incident-create: 必填字段为空时拒绝创建
+# ---------------------------------------------------------------------------
+
+def test_incident_create_empty_fields(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-create",
+            "--batch-id", bid,
+            "--exam-id", "20260608",
+            "--room-id", "A101",
+            "--subject", "math",
+            "--type", "package_damaged",
+            "--description", "",
+            "--operator", "",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.INCIDENT_INVALID_FIELD
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_incident_ids()) == 0
+
+
+# ---------------------------------------------------------------------------
+# 42. 跨重启 query/export 处置单数据一致性
+# ---------------------------------------------------------------------------
+
+def test_incident_cross_restart_consistency(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    t1 = _create_sample_incident(runner, env, bid, room_id="A101", subject="math")
+    t2 = _create_sample_incident(runner, env, bid, room_id="B201", subject="english")
+
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid,
+            "--ticket-id", t1,
+            "--operator", "李主任",
+            "--action", "处理中",
+            "--to-status", "processing",
+        ],
+        catch_exceptions=False,
+    )
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid,
+            "--ticket-id", t2,
+            "--operator", "主考",
+            "--reason", "已解决",
+        ],
+        catch_exceptions=False,
+    )
+
+    out_json1 = env["tmp_path"] / "incident_before.json"
+    out_csv1 = env["tmp_path"] / "incident_batch_before.csv"
+    for fmt, path in (("json", out_json1), ("csv", out_csv1)):
+        r = runner.invoke(
+            main,
+            [
+                "--storage-dir", str(env["storage_dir"]),
+                "export", "--format", fmt, "--output", str(path),
+            ],
+            catch_exceptions=False,
+        )
+        assert r.exit_code == ExitCode.SUCCESS
+
+    out_zip1 = env["tmp_path"] / "audit_incident_before.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid, "--output", str(out_zip1),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    Storage2 = Storage
+    storage2 = Storage2(env["storage_dir"])
+    batch2 = storage2.get_batch(bid)
+    assert len(batch2.list_incident_ids()) == 2
+    counts = batch2.count_incidents()
+    assert counts["open"] + counts["processing"] == 1
+    assert counts["closed"] == 1
+
+    out_json2 = env["tmp_path"] / "incident_after.json"
+    out_csv2 = env["tmp_path"] / "incident_batch_after.csv"
+    for fmt, path in (("json", out_json2), ("csv", out_csv2)):
+        r = runner.invoke(
+            main,
+            [
+                "--storage-dir", str(env["storage_dir"]),
+                "export", "--format", fmt, "--output", str(path),
+            ],
+            catch_exceptions=False,
+        )
+        assert r.exit_code == ExitCode.SUCCESS
+
+    data1 = json.loads(out_json1.read_text(encoding="utf-8"))
+    data2 = json.loads(out_json2.read_text(encoding="utf-8"))
+    b1 = data1["batches"][0]
+    b2 = data2["batches"][0]
+    assert b1["incidents"]["total"] == b2["incidents"]["total"] == 2
+    assert b1["incidents"]["open"] + b1["incidents"]["processing"] == 1
+    assert b2["incidents"]["open"] + b2["incidents"]["processing"] == 1
+    assert b1["incidents"]["closed"] == b2["incidents"]["closed"] == 1
+    assert len(b1["incidents"]["items"]) == len(b2["incidents"]["items"]) == 2
+
+    import csv as csv_mod
+    with out_csv1.open("r", encoding="utf-8-sig") as f:
+        rows1 = list(csv_mod.DictReader(f))
+    with out_csv2.open("r", encoding="utf-8-sig") as f:
+        rows2 = list(csv_mod.DictReader(f))
+    assert rows1[0]["incident_count"] == rows2[0]["incident_count"] == "2"
+    assert rows1[0]["incident_closed_count"] == rows2[0]["incident_closed_count"] == "1"
+
+    out_zip2 = env["tmp_path"] / "audit_incident_after.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid, "--output", str(out_zip2),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    with zipfile.ZipFile(out_zip2, "r") as zf:
+        names = set(zf.namelist())
+        assert "incidents_index.json" in names
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["counts"]["incident_total"] == 2
+        assert manifest["counts"]["incident_closed"] == 1
+        readme = zf.read("README.txt").decode("utf-8")
+        assert "异常处置单" in readme
+
+
+# ---------------------------------------------------------------------------
+# 43. incident-create: I/O 错误时不留下半成品
+# ---------------------------------------------------------------------------
+
+def test_incident_create_io_error_no_half_file(runner, fresh_env, monkeypatch):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    from exam_paper_dispatcher import storage as st_mod
+
+    real_save = st_mod.BatchState.save_incident
+
+    def bad_save(self, *args, **kwargs):
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(st_mod.BatchState, "save_incident", bad_save)
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-create",
+            "--batch-id", bid,
+            "--exam-id", "20260608",
+            "--room-id", "A101",
+            "--subject", "math",
+            "--type", "package_damaged",
+            "--description", "测试 IO 错误",
+            "--operator", "张老师",
+        ],
+    )
+    assert r.exit_code != ExitCode.SUCCESS, f"stdout={r.stdout}"
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.list_incident_ids()) == 0
+    incident_dir = batch.batch_dir / "incidents"
+    assert not incident_dir.exists() or not any(incident_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# 44. query 和 export 包含处置单摘要
+# ---------------------------------------------------------------------------
+
+def test_incident_query_and_export_summary(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    t1 = _create_sample_incident(runner, env, bid)
+    t2 = _create_sample_incident(runner, env, bid, room_id="B201", subject="english")
+
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid,
+            "--ticket-id", t2,
+            "--operator", "主考",
+            "--reason", "已解决",
+        ],
+        catch_exceptions=False,
+    )
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "query",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    list_output = r.stdout
+    assert "1/1" in list_output
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "query", "--batch-id", bid,
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    detail = json.loads(r.stdout)
+    assert "incidents" in detail
+    assert detail["incidents"]["total"] == 2
+    assert detail["incidents"]["closed"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 45. README & CLI help 提及异常处置单命令和退出码
+# ---------------------------------------------------------------------------
+
+def test_readme_mentions_incident():
+    readme = README_PATH.read_text(encoding="utf-8")
+    for keyword in (
+        "incident-create", "incident-list", "incident-handle", "incident-close",
+        "异常处置单", "处置单", "工单",
+    ):
+        assert keyword in readme, f"README 缺少关键字: {keyword}"
+
+
+def test_readme_incident_exit_codes_match_models():
+    readme = README_PATH.read_text(encoding="utf-8")
+    exit_codes = [
+        (ExitCode.INCIDENT_CONFLICT, "INCIDENT_CONFLICT"),
+        (ExitCode.INCIDENT_NOT_FOUND, "INCIDENT_NOT_FOUND"),
+        (ExitCode.INCIDENT_ALREADY_CLOSED, "INCIDENT_ALREADY_CLOSED"),
+        (ExitCode.INCIDENT_INVALID_FIELD, "INCIDENT_INVALID_FIELD"),
+    ]
+    for code, name in exit_codes:
+        assert str(code) in readme, f"README 缺少退出码 {code} ({name})"
+        assert name in readme, f"README 缺少退出码常量名 {name}"
+
+
+def test_cli_help_mentions_incident(runner):
+    r = runner.invoke(main, ["--help"])
+    top_help = r.stdout + (r.stderr or "")
+    assert r.exit_code == 0
+    assert "incident-create" in top_help
+    assert "incident-list" in top_help
+    assert "incident-handle" in top_help
+    assert "incident-close" in top_help
+
+    for cmd in ("incident-create", "incident-list", "incident-handle", "incident-close"):
+        r = runner.invoke(main, [cmd, "--help"])
+        help_text = r.stdout + (r.stderr or "")
+        assert r.exit_code == 0, f"{cmd} --help exit code = {r.exit_code}"
+
+    r = runner.invoke(main, ["incident-create", "--help"])
+    help_text = r.stdout + (r.stderr or "")
+    for kw in ("batch-id", "exam-id", "room-id", "subject", "type",
+               "description", "operator", "attachment"):
+        assert kw in help_text, f"incident-create --help 缺少选项: {kw}"
+
+    r = runner.invoke(main, ["incident-handle", "--help"])
+    help_text = r.stdout + (r.stderr or "")
+    for kw in ("batch-id", "ticket-id", "operator", "action", "note", "to-status"):
+        assert kw in help_text, f"incident-handle --help 缺少选项: {kw}"
+
+    r = runner.invoke(main, ["incident-close", "--help"])
+    help_text = r.stdout + (r.stderr or "")
+    for kw in ("batch-id", "ticket-id", "operator", "reason"):
+        assert kw in help_text, f"incident-close --help 缺少选项: {kw}"
+

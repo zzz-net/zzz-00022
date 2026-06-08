@@ -19,6 +19,13 @@ from .models import (
     SIGNOFF_AUDIT_LOG_FILE,
     SIGNOFF_ROOM_VERSIONS_FILE,
     gen_signoff_audit_id,
+    IncidentTicket,
+    IncidentStatus,
+    INCIDENT_AUDIT_LOG_FILE,
+    INCIDENTS_DIR,
+    INCIDENT_INDEX_FILE,
+    gen_incident_id,
+    gen_incident_handling_id,
 )
 
 
@@ -438,6 +445,101 @@ class BatchState:
         history["audit_records"].sort(key=lambda x: x["timestamp"])
         return history
 
+    def _get_incidents_dir(self) -> Path:
+        return self.batch_dir / INCIDENTS_DIR
+
+    def _get_incident_audit_log_path(self) -> Path:
+        return self._get_incidents_dir() / INCIDENT_AUDIT_LOG_FILE
+
+    def save_incident(self, ticket: IncidentTicket) -> Path:
+        incidents_dir = self._get_incidents_dir()
+        incidents_dir.mkdir(parents=True, exist_ok=True)
+        target = incidents_dir / f"{ticket.ticket_id}.json"
+        target.write_text(
+            json.dumps(ticket.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._update_incident_index(ticket)
+        self._log_event(
+            f"异常处置单: {ticket.ticket_id}, "
+            f"type={ticket.incident_type.value}, "
+            f"room={ticket.room_id}/{ticket.subject}, "
+            f"status={ticket.status.value}"
+        )
+        self.save()
+        return target
+
+    def list_incident_ids(self) -> list[str]:
+        incidents_dir = self._get_incidents_dir()
+        if not incidents_dir.exists():
+            return []
+        files = sorted(
+            incidents_dir.glob("incident-*.json"),
+            key=lambda p: (p.stat().st_mtime, p.name),
+        )
+        return [p.stem for p in files]
+
+    def load_incident(self, ticket_id: str) -> Optional[IncidentTicket]:
+        p = self._get_incidents_dir() / f"{ticket_id}.json"
+        if not p.exists():
+            return None
+        return IncidentTicket.model_validate_json(p.read_text(encoding="utf-8"))
+
+    def load_all_incidents(self) -> list[IncidentTicket]:
+        tickets = []
+        for tid in self.list_incident_ids():
+            t = self.load_incident(tid)
+            if t:
+                tickets.append(t)
+        return tickets
+
+    def load_open_incidents(self) -> list[IncidentTicket]:
+        return [t for t in self.load_all_incidents() if t.status != IncidentStatus.CLOSED]
+
+    def find_open_incident_by_room(self, exam_id: str, room_id: str, subject: str) -> Optional[IncidentTicket]:
+        for t in self.load_open_incidents():
+            if t.exam_id == exam_id and t.room_id == room_id and t.subject == subject:
+                return t
+        return None
+
+    def _update_incident_index(self, ticket: IncidentTicket):
+        idx_path = self._get_incidents_dir() / INCIDENT_INDEX_FILE
+        if idx_path.exists():
+            data = json.loads(idx_path.read_text(encoding="utf-8"))
+        else:
+            data = {}
+        data[ticket.ticket_id] = {
+            "ticket_id": ticket.ticket_id,
+            "created_at": ticket.created_at,
+            "status": ticket.status.value,
+            "exam_id": ticket.exam_id,
+            "room_id": ticket.room_id,
+            "subject": ticket.subject,
+            "incident_type": ticket.incident_type.value,
+            "operator": ticket.operator,
+            "closed_at": ticket.closed_at,
+            "handling_count": len(ticket.handling_records),
+        }
+        idx_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_incident_index(self) -> dict:
+        idx_path = self._get_incidents_dir() / INCIDENT_INDEX_FILE
+        if not idx_path.exists():
+            return {}
+        return json.loads(idx_path.read_text(encoding="utf-8"))
+
+    def count_incidents(self) -> dict:
+        all_tickets = self.load_all_incidents()
+        return {
+            "total": len(all_tickets),
+            "open": sum(1 for t in all_tickets if t.status == IncidentStatus.OPEN),
+            "processing": sum(1 for t in all_tickets if t.status == IncidentStatus.PROCESSING),
+            "closed": sum(1 for t in all_tickets if t.status == IncidentStatus.CLOSED),
+        }
+
     def _log_event(self, message: str):
         ts = datetime.now().isoformat()
         line = f"[{ts}] [{self.batch_id}] {message}\n"
@@ -565,4 +667,15 @@ class Storage:
                 entry.update(meta)
                 results.append(entry)
         results.sort(key=lambda x: x.get("imported_at", ""), reverse=True)
+        return results
+
+    def list_all_incidents(self) -> list[dict]:
+        results = []
+        for batch in self.list_batches():
+            idx = batch.load_incident_index()
+            for tid, meta in idx.items():
+                entry = {"batch_id": batch.batch_id}
+                entry.update(meta)
+                results.append(entry)
+        results.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         return results

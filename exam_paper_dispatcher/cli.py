@@ -41,6 +41,20 @@ from .signoff import (
     get_signoff_history,
     CORRECTABLE_FIELDS,
 )
+from .incident import (
+    IncidentError,
+    create_incident,
+    handle_incident,
+    close_incident,
+    list_incidents,
+    get_incident_detail,
+    build_incident_summary,
+)
+from .models import (
+    IncidentStatus,
+    IncidentType,
+    INCIDENT_TYPE_LABELS,
+)
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
@@ -502,6 +516,189 @@ def _print_signoff_history(history_list: list[dict]):
             console.print(t_curr)
 
 
+def _print_incident_created(ticket, error: Optional[IncidentError]):
+    if error:
+        err_console.print(f"[red]创建异常处置单失败: {error.message}[/red]")
+        if error.details:
+            for k, v in error.details.items():
+                console.print(f"  {k}: {v}")
+        err_console.print(f"退出码: {error.exit_code}")
+        return
+
+    p = Panel.fit(
+        f"处置单ID: [bold]{ticket.ticket_id}[/bold]\n"
+        f"批次: [bold]{ticket.batch_id}[/bold]\n"
+        f"考场: [bold]{ticket.exam_id}/{ticket.room_id}/{ticket.subject}[/bold]\n"
+        f"问题类型: [bold]{INCIDENT_TYPE_LABELS.get(ticket.incident_type, ticket.incident_type.value)}[/bold]\n"
+        f"操作人: {ticket.operator}\n"
+        f"创建时间: {ticket.created_at}\n"
+        f"状态: [yellow]{ticket.status.value}[/yellow]",
+        title="[green]异常处置单创建成功[/green]",
+        border_style="green",
+    )
+    console.print(p)
+
+    if ticket.description:
+        console.print(f"\n[bold]问题说明:[/bold]\n  {ticket.description}")
+    if ticket.attachment_paths:
+        t_att = Table(title=f"附件 ({len(ticket.attachment_paths)} 个)", show_lines=True)
+        t_att.add_column("#")
+        t_att.add_column("路径")
+        for i, p in enumerate(ticket.attachment_paths, 1):
+            t_att.add_row(str(i), p)
+        console.print(t_att)
+
+
+def _print_incident_list(tickets: list):
+    if not tickets:
+        console.print("[dim]无异常处置单记录[/dim]")
+        return
+
+    t = Table(title=f"异常处置单列表 (共 {len(tickets)} 个)", show_lines=True)
+    t.add_column("处置单ID", style="bold", overflow="fold")
+    t.add_column("批次ID", overflow="fold")
+    t.add_column("考场", overflow="fold")
+    t.add_column("科目", overflow="fold")
+    t.add_column("类型", overflow="fold")
+    t.add_column("状态", overflow="fold")
+    t.add_column("操作人", overflow="fold")
+    t.add_column("创建时间", overflow="fold")
+    t.add_column("处理记录", overflow="fold")
+    t.add_column("关闭时间", overflow="fold")
+
+    for ticket in tickets:
+        status_style = {
+            "open": "yellow",
+            "processing": "cyan",
+            "closed": "green",
+        }.get(ticket.status.value, "white")
+        t.add_row(
+            ticket.ticket_id,
+            ticket.batch_id,
+            f"{ticket.exam_id}/{ticket.room_id}",
+            ticket.subject,
+            INCIDENT_TYPE_LABELS.get(ticket.incident_type, ticket.incident_type.value),
+            f"[{status_style}]{ticket.status.value}[/{status_style}]",
+            ticket.operator,
+            ticket.created_at[:19],
+            str(len(ticket.handling_records)),
+            (ticket.closed_at or "")[:19],
+        )
+    console.print(t)
+
+
+def _print_incident_detail(detail: dict):
+    status_style = {
+        "open": "yellow",
+        "processing": "cyan",
+        "closed": "green",
+    }.get(detail["status"], "white")
+
+    p = Panel.fit(
+        f"处置单ID: [bold]{detail['ticket_id']}[/bold]\n"
+        f"批次: [bold]{detail['batch_id']}[/bold]\n"
+        f"考场: [bold]{detail['exam_id']}/{detail['room_id']}/{detail['subject']}[/bold]\n"
+        f"问题类型: [bold]{detail['incident_type_label']}[/bold]\n"
+        f"操作人: {detail['operator']}\n"
+        f"创建时间: {detail['created_at']}\n"
+        f"状态: [{status_style}]{detail['status']}[/{status_style}]\n"
+        f"处理记录数: {detail['handling_count']}"
+        + (f"\n关闭时间: {detail['closed_at']}" if detail.get("closed_at") else "")
+        + (f"\n关闭人: {detail['closed_by']}" if detail.get("closed_by") else "")
+        + (f"\n关闭原因: {detail['close_reason']}" if detail.get("close_reason") else ""),
+        title="异常处置单详情",
+        border_style="cyan",
+    )
+    console.print(p)
+
+    console.print(f"\n[bold]问题说明:[/bold]\n  {detail['description']}")
+
+    if detail.get("attachment_paths"):
+        t_att = Table(title=f"附件 ({len(detail['attachment_paths'])} 个)", show_lines=True)
+        t_att.add_column("#")
+        t_att.add_column("路径")
+        for i, p in enumerate(detail["attachment_paths"], 1):
+            t_att.add_row(str(i), p)
+        console.print(t_att)
+
+    if detail.get("handling_records"):
+        t_rec = Table(title=f"处理记录 ({len(detail['handling_records'])} 条)", show_lines=True)
+        t_rec.add_column("时间")
+        t_rec.add_column("操作人")
+        t_rec.add_column("处理动作")
+        t_rec.add_column("备注")
+        for rec in detail["handling_records"]:
+            t_rec.add_row(
+                rec["timestamp"][:19],
+                rec["operator"],
+                rec["action"],
+                rec.get("note", ""),
+            )
+        console.print(t_rec)
+
+
+def _print_incident_handled(ticket, error: Optional[IncidentError]):
+    if error:
+        err_console.print(f"[red]处理异常处置单失败: {error.message}[/red]")
+        if error.details:
+            for k, v in error.details.items():
+                console.print(f"  {k}: {v}")
+        err_console.print(f"退出码: {error.exit_code}")
+        return
+
+    if ticket is None:
+        return
+
+    status_style = {
+        "open": "yellow",
+        "processing": "cyan",
+        "closed": "green",
+    }.get(ticket.status.value, "white")
+
+    p = Panel.fit(
+        f"处置单ID: [bold]{ticket.ticket_id}[/bold]\n"
+        f"状态: [{status_style}]{ticket.status.value}[/{status_style}]\n"
+        f"处理记录数: {len(ticket.handling_records)}",
+        title="[green]处理记录已追加[/green]",
+        border_style="green",
+    )
+    console.print(p)
+
+    latest = ticket.handling_records[-1]
+    t_latest = Table(title="最新处理记录", show_lines=True)
+    t_latest.add_column("字段")
+    t_latest.add_column("值")
+    t_latest.add_row("时间", latest.timestamp)
+    t_latest.add_row("操作人", latest.operator)
+    t_latest.add_row("处理动作", latest.action)
+    if latest.note:
+        t_latest.add_row("备注", latest.note)
+    console.print(t_latest)
+
+
+def _print_incident_closed(ticket, error: Optional[IncidentError]):
+    if error:
+        err_console.print(f"[red]关闭异常处置单失败: {error.message}[/red]")
+        if error.details:
+            for k, v in error.details.items():
+                console.print(f"  {k}: {v}")
+        err_console.print(f"退出码: {error.exit_code}")
+        return
+
+    if ticket is None:
+        return
+
+    p = Panel.fit(
+        f"处置单ID: [bold]{ticket.ticket_id}[/bold]\n"
+        f"关闭时间: {ticket.closed_at}\n"
+        f"关闭人: {ticket.closed_by}"
+        + (f"\n关闭原因: {ticket.close_reason}" if ticket.close_reason else ""),
+        title="[green]异常处置单已关闭[/green]",
+        border_style="green",
+    )
+    console.print(p)
+
+
 @click.group(help="离线考试试卷包校验与发放 CLI")
 @click.option("--storage-dir", default=".exam_dispatch_state", show_default=True,
               help="持久化存储目录")
@@ -662,8 +859,9 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
         t.add_column("项目", overflow="fold")
         t.add_column("成/败", overflow="fold")
         t.add_column("签收", overflow="fold")
-        t.add_column("异常", overflow="fold")
+        t.add_column("签收异", overflow="fold")
         t.add_column("更/撤", overflow="fold")
+        t.add_column("处置单", overflow="fold")
         t.add_column("最后签收", overflow="fold")
         t.add_column("备注", overflow="fold")
         for r in rows:
@@ -685,6 +883,9 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
                 "none": "dim",
             }.get(signoff_status, "white")
             audit_info = f"{r.get('signoff_corrected_count', 0)}/{r.get('signoff_revoked_count', 0)}"
+            incident_open = r.get("incident_open_count", 0) + r.get("incident_processing_count", 0)
+            incident_closed = r.get("incident_closed_count", 0)
+            incident_style = "yellow" if incident_open > 0 else "dim"
             t.add_row(
                 r["batch_id"],
                 f"[{st_style}]{r['status']}[/{st_style}]",
@@ -695,6 +896,7 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
                 f"[{signoff_style}]{signoff_status}[/{signoff_style}]",
                 str(r.get("signoff_abnormal_count", 0)),
                 audit_info,
+                f"[{incident_style}]{incident_open}/{incident_closed}[/{incident_style}]",
                 str(r.get("signoff_last_imported_at", ""))[:19],
                 r.get("notes", "")[:30],
             )
@@ -942,6 +1144,193 @@ def signoff_history(
         console.print_json(data=history)
     else:
         _print_signoff_history(history)
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(
+    help="创建异常处置单: 发放后登记试卷包损坏、错装、临时换考场等问题。"
+         "同一考场存在未关闭工单时将提示冲突。"
+)
+@click.option("--batch-id", required=True, help="批次 ID")
+@click.option("--exam-id", required=True, help="考试 ID")
+@click.option("--room-id", required=True, help="考场 ID")
+@click.option("--subject", required=True, help="科目")
+@click.option(
+    "--type", "incident_type",
+    type=click.Choice(["package_damaged", "wrong_package", "room_change", "other"]),
+    required=True,
+    help="问题类型: package_damaged(试卷包损坏)/wrong_package(错装)/room_change(临时换考场)/other(其他)",
+)
+@click.option("--description", required=True, help="问题说明")
+@click.option("--operator", required=True, help="操作人姓名/工号")
+@click.option("--attachment", "attachments", multiple=True, help="附件路径（可多次指定）")
+@click.pass_context
+def incident_create(
+    ctx: click.Context,
+    batch_id: str,
+    exam_id: str,
+    room_id: str,
+    subject: str,
+    incident_type: str,
+    description: str,
+    operator: str,
+    attachments: tuple[str, ...],
+):
+    storage: Storage = ctx.obj["storage"]
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        err_console.print(f"批次不存在: {batch_id}")
+        ctx.exit(ExitCode.BATCH_NOT_FOUND)
+
+    type_map = {
+        "package_damaged": IncidentType.PACKAGE_DAMAGED,
+        "wrong_package": IncidentType.WRONG_PACKAGE,
+        "room_change": IncidentType.ROOM_CHANGE,
+        "other": IncidentType.OTHER,
+    }
+    itype = type_map[incident_type]
+
+    ticket, error = create_incident(
+        storage=storage,
+        batch=batch,
+        exam_id=exam_id,
+        room_id=room_id,
+        subject=subject,
+        incident_type=itype,
+        description=description,
+        operator=operator,
+        attachment_paths=list(attachments),
+    )
+    _print_incident_created(ticket, error)
+    if error:
+        ctx.exit(error.exit_code)
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(
+    help="查看异常处置单: 列出批次的处置单或查看单个处置单详情。"
+         "可按状态过滤（open/processing/closed）。"
+)
+@click.option("--batch-id", required=True, help="批次 ID")
+@click.option("--ticket-id", default=None, help="处置单 ID（不传则列出该批次所有处置单）")
+@click.option(
+    "--status", "status_filter",
+    type=click.Choice(["open", "processing", "closed"]),
+    default=None,
+    help="按状态过滤",
+)
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]),
+              default="table", show_default=True, help="输出格式")
+@click.pass_context
+def incident_list(
+    ctx: click.Context,
+    batch_id: str,
+    ticket_id: Optional[str],
+    status_filter: Optional[str],
+    fmt: str,
+):
+    storage: Storage = ctx.obj["storage"]
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        err_console.print(f"批次不存在: {batch_id}")
+        ctx.exit(ExitCode.BATCH_NOT_FOUND)
+
+    if ticket_id:
+        detail = get_incident_detail(batch, ticket_id)
+        if not detail:
+            err_console.print(f"异常处置单不存在: {ticket_id}")
+            ctx.exit(ExitCode.INCIDENT_NOT_FOUND)
+        if fmt == "json":
+            console.print_json(data=detail)
+        else:
+            _print_incident_detail(detail)
+    else:
+        status = IncidentStatus(status_filter) if status_filter else None
+        tickets = list_incidents(batch, status_filter=status)
+        if fmt == "json":
+            console.print_json(data=[get_incident_detail(batch, t.ticket_id) for t in tickets])
+        else:
+            _print_incident_list(tickets)
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(
+    help="处理异常处置单: 追加处理记录，可选择更新状态（processing 或保持 open）。"
+         "已关闭的处置单无法追加处理记录。"
+)
+@click.option("--batch-id", required=True, help="批次 ID")
+@click.option("--ticket-id", required=True, help="处置单 ID")
+@click.option("--operator", required=True, help="操作人姓名/工号")
+@click.option("--action", required=True, help="处理动作描述")
+@click.option("--note", default="", help="处理备注")
+@click.option(
+    "--to-status", "to_status",
+    type=click.Choice(["open", "processing"]),
+    default=None,
+    help="更新状态（可选：open/processing）",
+)
+@click.pass_context
+def incident_handle(
+    ctx: click.Context,
+    batch_id: str,
+    ticket_id: str,
+    operator: str,
+    action: str,
+    note: str,
+    to_status: Optional[str],
+):
+    storage: Storage = ctx.obj["storage"]
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        err_console.print(f"批次不存在: {batch_id}")
+        ctx.exit(ExitCode.BATCH_NOT_FOUND)
+
+    new_status = IncidentStatus(to_status) if to_status else None
+    ticket, error = handle_incident(
+        batch=batch,
+        ticket_id=ticket_id,
+        operator=operator,
+        action=action,
+        note=note,
+        new_status=new_status,
+    )
+    _print_incident_handled(ticket, error)
+    if error:
+        ctx.exit(error.exit_code)
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(
+    help="关闭异常处置单: 将处置单状态标记为 closed，记录关闭人和关闭原因。"
+         "已关闭的处置单不可再次关闭或追加处理记录。"
+)
+@click.option("--batch-id", required=True, help="批次 ID")
+@click.option("--ticket-id", required=True, help="处置单 ID")
+@click.option("--operator", required=True, help="操作人姓名/工号")
+@click.option("--reason", "close_reason", default="", help="关闭原因")
+@click.pass_context
+def incident_close(
+    ctx: click.Context,
+    batch_id: str,
+    ticket_id: str,
+    operator: str,
+    close_reason: str,
+):
+    storage: Storage = ctx.obj["storage"]
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        err_console.print(f"批次不存在: {batch_id}")
+        ctx.exit(ExitCode.BATCH_NOT_FOUND)
+
+    ticket, error = close_incident(
+        batch=batch,
+        ticket_id=ticket_id,
+        operator=operator,
+        close_reason=close_reason,
+    )
+    _print_incident_closed(ticket, error)
+    if error:
+        ctx.exit(error.exit_code)
     ctx.exit(ExitCode.SUCCESS)
 
 

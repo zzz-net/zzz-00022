@@ -17,6 +17,7 @@ from .models import (
     compute_sha256,
 )
 from .signoff import build_signoff_summary
+from .incident import build_incident_summary
 from .storage import (
     CONFIG_SNAPSHOT_FILE,
     DISPATCH_REPORT_FILE,
@@ -25,6 +26,8 @@ from .storage import (
     ROLLBACK_REPORT_FILE,
     SIGNOFF_INDEX_FILE,
     SIGNOFFS_DIR,
+    INCIDENTS_DIR,
+    INCIDENT_INDEX_FILE,
     BatchState,
     Storage,
 )
@@ -46,6 +49,9 @@ SIGNOFF_SUMMARY_FILE = "signoff_summary.json"
 SIGNOFF_INDEX_EXPORT = "signoffs_index.json"
 SIGNOFF_AUDIT_EXPORT = "signoff_audit_log.jsonl"
 SIGNOFF_VERSIONS_EXPORT = "signoff_room_versions.json"
+
+INCIDENT_SUMMARY_FILE = "incident_summary.json"
+INCIDENT_INDEX_EXPORT = "incidents_index.json"
 
 
 class AuditPackError(Exception):
@@ -129,6 +135,27 @@ def _collect_batch_payload(batch: BatchState, storage: Storage) -> dict[str, byt
                 room_versions, ensure_ascii=False, indent=2
             ).encode("utf-8")
 
+    incident_summary = build_incident_summary(batch)
+    if incident_summary.get("has_incident"):
+        payload[INCIDENT_SUMMARY_FILE] = json.dumps(
+            incident_summary, ensure_ascii=False, indent=2
+        ).encode("utf-8")
+
+        incident_index = batch.load_incident_index()
+        if incident_index:
+            payload[INCIDENT_INDEX_EXPORT] = json.dumps(
+                incident_index, ensure_ascii=False, indent=2
+            ).encode("utf-8")
+
+        incident_ids = batch.list_incident_ids()
+        for tid in incident_ids:
+            tkt = batch.load_incident(tid)
+            if tkt:
+                fname = f"{INCIDENTS_DIR}/{tid}.json"
+                payload[fname] = json.dumps(
+                    tkt.model_dump(mode="json"), ensure_ascii=False, indent=2
+                ).encode("utf-8")
+
     return payload
 
 
@@ -162,6 +189,15 @@ def _build_readme(batch: BatchState, payload: dict[str, bytes]) -> str:
         if signoff.get("last_imported_at"):
             lines.append(f"最后签收导入   : {signoff.get('last_imported_at')}")
         lines.append("")
+
+    if INCIDENT_SUMMARY_FILE in payload:
+        incident = json.loads(payload[INCIDENT_SUMMARY_FILE].decode("utf-8"))
+        lines.append(f"异常处置单总数 : {incident.get('count', 0)}")
+        lines.append(f"  未处理(open)  : {incident.get('open_count', 0)}")
+        lines.append(f"  处理中        : {incident.get('processing_count', 0)}")
+        lines.append(f"  已关闭        : {incident.get('closed_count', 0)}")
+        lines.append("")
+
     lines.append("包含文件:")
     for name in sorted(payload.keys()):
         size = len(payload[name])
@@ -229,6 +265,17 @@ def _build_manifest(batch: BatchState, payload: dict[str, bytes]) -> dict:
         signoff_revoked = summary.get("revoked_count", 0)
         signoff_audit_total = summary.get("audit_count", 0)
 
+    incident_count = 0
+    incident_open = 0
+    incident_processing = 0
+    incident_closed = 0
+    if INCIDENT_SUMMARY_FILE in payload:
+        summary = json.loads(payload[INCIDENT_SUMMARY_FILE].decode("utf-8"))
+        incident_count = summary.get("count", 0)
+        incident_open = summary.get("open_count", 0)
+        incident_processing = summary.get("processing_count", 0)
+        incident_closed = summary.get("closed_count", 0)
+
     return {
         "schema_version": "1.0",
         "generated_at": datetime.now().isoformat(),
@@ -245,6 +292,10 @@ def _build_manifest(batch: BatchState, payload: dict[str, bytes]) -> dict:
             "signoff_corrected": signoff_corrected,
             "signoff_revoked": signoff_revoked,
             "signoff_audit_total": signoff_audit_total,
+            "incident_total": incident_count,
+            "incident_open": incident_open,
+            "incident_processing": incident_processing,
+            "incident_closed": incident_closed,
         },
         "files_sha256": files_sha,
     }

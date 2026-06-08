@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from .signoff import build_signoff_summary
+from .incident import build_incident_summary
 from .storage import BatchState, Storage
 
 
@@ -97,6 +98,9 @@ def query_batch(storage: Storage, batch_id: str) -> Optional[dict]:
             f"{k[0]}:{k[1]}:{k[2]}": v for k, v in effective_signoffs.items()
         }
 
+    incident_summary = build_incident_summary(batch)
+    result["incidents"] = incident_summary
+
     return result
 
 
@@ -120,6 +124,13 @@ def list_batches(storage: Storage, status_filter: Optional[str] = None) -> list[
         d["signoff_audit_count"] = signoff_summary.get("audit_count", 0)
         d["signoff_corrected_count"] = signoff_summary.get("corrected_count", 0)
         d["signoff_revoked_count"] = signoff_summary.get("revoked_count", 0)
+
+        incident_summary = build_incident_summary(b)
+        d["incident_count"] = incident_summary.get("count", 0)
+        d["incident_open_count"] = incident_summary.get("open_count", 0)
+        d["incident_processing_count"] = incident_summary.get("processing_count", 0)
+        d["incident_closed_count"] = incident_summary.get("closed_count", 0)
+
         result.append(d)
     return result
 
@@ -161,6 +172,7 @@ def export_batches_csv(
         "signoff_count", "signoff_status", "signoff_signed_rooms",
         "signoff_abnormal_count", "signoff_last_imported_at",
         "signoff_audit_count", "signoff_corrected_count", "signoff_revoked_count",
+        "incident_count", "incident_open_count", "incident_processing_count", "incident_closed_count",
     ]
     with out.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -179,6 +191,11 @@ def export_batches_csv(
             row["signoff_audit_count"] = signoff_summary.get("audit_count", 0)
             row["signoff_corrected_count"] = signoff_summary.get("corrected_count", 0)
             row["signoff_revoked_count"] = signoff_summary.get("revoked_count", 0)
+            incident_summary = build_incident_summary(b)
+            row["incident_count"] = incident_summary.get("count", 0)
+            row["incident_open_count"] = incident_summary.get("open_count", 0)
+            row["incident_processing_count"] = incident_summary.get("processing_count", 0)
+            row["incident_closed_count"] = incident_summary.get("closed_count", 0)
             writer.writerow(row)
     return out
 

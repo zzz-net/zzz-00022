@@ -9,7 +9,8 @@
 - **目标冲突检测**：复制前发现重复目标名立即报错终止
 - **批次发放**：支持目录复制或 zip 打包两种模式
 - **发放签收核销**：发放后导入签收 CSV，按批次记录每个考场的签收人、时间、实收份数、缺损说明和备注；校验批次已发放、考场归属、份数匹配；重复导入冲突需显式 --force 确认；生成核销摘要，持久化并可 query/export
-- **状态持久化**：批次状态、配置快照、预检/预演/发放/回滚/签收报告落盘，重启不丢失
+- **异常处置单**：发放后可登记试卷包损坏、错装、临时换考场等问题为工单，而不是直接改发放结果；支持创建、查看、处理、关闭处置单；同一考场未关闭工单再次创建提示冲突，允许明确参数追加处理记录但不能静默覆盖
+- **状态持久化**：批次状态、配置快照、预检/预演/发放/回滚/签收/异常处置报告落盘，重启不丢失
 - **安全回滚**：校验 SHA256，发现目标文件被替换时停止并给出证据
 - **交接审计包**：一键打包配置快照、各类报告、事件日志为离线 zip，内置 manifest + SHA256 防篡改校验
 - **数据导出**：支持 JSON、批次 CSV、发放明细 CSV（导出结果自动包含预演和签收摘要）
@@ -87,6 +88,10 @@ exam-dispatch signoff           --batch-id ... --signoffs ... [--force]     # �
 exam-dispatch signoff-correct   --batch-id ... --exam-id ... --room-id ...  # 更正签收记录
 exam-dispatch signoff-revoke    --batch-id ... --exam-id ... --room-id ...  # 撤销签收记录
 exam-dispatch signoff-history   --batch-id ... [--room-id ...]              # 查看签收历史
+exam-dispatch incident-create   --batch-id ... --exam-id ... --room-id ...  # 创建异常处置单
+exam-dispatch incident-list     --batch-id ... [--ticket-id ...]            # 查看异常处置单
+exam-dispatch incident-handle   --batch-id ... --ticket-id ...              # 处理异常处置单（追加记录）
+exam-dispatch incident-close    --batch-id ... --ticket-id ...              # 关闭异常处置单
 exam-dispatch query             [--batch-id ...]                            # 第4步：查询
 exam-dispatch rollback          --batch-id ... [--force]                    # 第5步：回滚
 exam-dispatch audit-pack        --batch-id ... --output ...                 # 打包：生成交接审计包
@@ -231,6 +236,127 @@ python -m exam_paper_dispatcher.cli signoff \
   - `16` 已存在签收记录，需加 `--force` 确认覆盖
 
 > 签收数据按批次持久化（`storage_dir/batches/<batch_id>/signoffs/`），重启 CLI 后 `query` 列表可查看签收状态、异常数量、最后导入时间；`export` 导出 JSON/CSV 自动附带签收摘要和每个考场的签收明细。
+
+---
+
+## 异常处置单 (incident-*)
+
+考务人员在发放后如发现试卷包损坏、错装、临时换考场等问题，可登记成异常处置单（工单），而不是直接修改发放结果。处置单按批次持久化，重启 CLI 后仍可查询、处理和导出。
+
+### 字段说明
+
+| 字段 | 说明 | 必填 |
+|---|---|---|
+| `batch_id` | 批次 ID | 是 |
+| `exam_id` | 考试 ID | 是 |
+| `room_id` | 考场 ID | 是 |
+| `subject` | 科目 | 是 |
+| `type` | 问题类型：`package_damaged`(试卷包损坏)/`wrong_package`(错装)/`room_change`(临时换考场)/`other`(其他) | 是 |
+| `description` | 问题说明 | 是 |
+| `operator` | 操作人姓名/工号 | 是 |
+| `attachment` | 附件路径（可多次指定） | 否 |
+
+每个处置单还包含：`created_at`(创建时间)、`status`(状态：open/processing/closed)、`closed_at`(关闭时间)、`closed_by`(关闭人)、`close_reason`(关闭原因)、`handling_records`(处理记录列表，每条含时间、操作人、处理动作、备注)。
+
+### 核心规则
+
+1. **同一考场未关闭工单冲突检测**：同一 `(exam_id, room_id, subject)` 存在状态非 `closed` 的处置单时，再次创建将被拒绝并提示冲突（退出码 32）。
+2. **追加处理记录而非覆盖**：处理处置单时通过 `incident-handle` 命令追加记录，不会静默覆盖已有内容。
+3. **关闭后不可操作**：`closed` 状态的处置单无法追加处理记录或再次关闭。
+4. **附件路径校验**：创建时校验附件路径存在且为文件，校验失败则拒绝创建。
+5. **原子写入**：保存失败时不留下半成品文件。
+
+### 1. 创建处置单 (incident-create)
+
+```bash
+# 创建一个"试卷包损坏"的处置单
+python -m exam_paper_dispatcher.cli incident-create \
+  --batch-id <批次ID> \
+  --exam-id 20260608 \
+  --room-id A101 \
+  --subject math \
+  --type package_damaged \
+  --description "外包装袋撕裂，内装试卷30份完好，仅封面轻微折角" \
+  --operator 张老师 \
+  --attachment /path/to/photo1.jpg \
+  --attachment /path/to/photo2.jpg
+```
+
+- **退出码**：
+  - `0` 创建成功
+  - `7` 批次不存在
+  - `32` 同一考场存在未关闭工单（冲突）
+  - `35` 必填字段为空或附件路径无效
+  - `10` I/O 错误
+
+### 2. 查看处置单 (incident-list)
+
+```bash
+# 列出批次的所有处置单
+python -m exam_paper_dispatcher.cli incident-list --batch-id <批次ID>
+
+# 按状态过滤
+python -m exam_paper_dispatcher.cli incident-list --batch-id <批次ID> --status open
+
+# 查看单个处置单详情 (JSON)
+python -m exam_paper_dispatcher.cli incident-list \
+  --batch-id <批次ID> \
+  --ticket-id <处置单ID> \
+  --format json
+```
+
+列表显示：处置单 ID、批次、考场、科目、问题类型、状态、操作人、创建时间、处理记录数、关闭时间。
+
+### 3. 处理处置单 (incident-handle)
+
+追加处理记录，可选择更新状态（`open` → `processing`）：
+
+```bash
+# 追加处理记录，状态变更为 processing
+python -m exam_paper_dispatcher.cli incident-handle \
+  --batch-id <批次ID> \
+  --ticket-id <处置单ID> \
+  --operator 李主任 \
+  --action "联系印刷厂重印封面" \
+  --note "预计30分钟内送达" \
+  --to-status processing
+
+# 仅追加记录，不改变状态
+python -m exam_paper_dispatcher.cli incident-handle \
+  --batch-id <批次ID> \
+  --ticket-id <处置单ID> \
+  --operator 李主任 \
+  --action "重印封面已送达，更换完毕"
+```
+
+- **退出码**：
+  - `0` 处理成功
+  - `7` 批次不存在
+  - `33` 处置单不存在
+  - `34` 处置单已关闭
+  - `35` 必填字段为空
+
+### 4. 关闭处置单 (incident-close)
+
+```bash
+python -m exam_paper_dispatcher.cli incident-close \
+  --batch-id <批次ID> \
+  --ticket-id <处置单ID> \
+  --operator 李主任 \
+  --reason "问题已解决，考生正常入场"
+```
+
+- **退出码**：
+  - `0` 关闭成功
+  - `7` 批次不存在
+  - `33` 处置单不存在
+  - `34` 处置单已关闭
+  - `35` 操作人为空
+
+> 异常处置单数据按批次持久化（`storage_dir/batches/<batch_id>/incidents/`），重启 CLI 后：
+> - `query` 列表可查看每个批次的未处理/处理中/已关闭处置单数量
+> - `export JSON` 和 `export CSV`（批次摘要）自动附带处置单摘要
+> - `audit-pack` 会把所有处置单、处置单索引和摘要完整打入审计包
 
 ---
 
@@ -409,6 +535,11 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
 | 29 | SIGNOFF_REVOKE_NOT_SIGNED | 签收撤销失败：考场尚未签收或已被撤销 |
 | 30 | SIGNOFF_AUDIT_OUTPUT_ERROR | 签收审计日志写入失败 |
 | 31 | SIGNOFF_AUDIT_MISSING_REASON | 签收更正/撤销必须提供操作原因 |
+| 32 | INCIDENT_CONFLICT | 同一考场存在未关闭的异常处置单 |
+| 33 | INCIDENT_NOT_FOUND | 异常处置单不存在 |
+| 34 | INCIDENT_ALREADY_CLOSED | 异常处置单已关闭，无法处理或再次关闭 |
+| 35 | INCIDENT_INVALID_FIELD | 异常处置单字段校验失败（必填项为空/附件路径无效） |
+| 36 | INCIDENT_AUDIT_OUTPUT_ERROR | 异常处置单日志写入失败 |
 | 99 | UNKNOWN_ERROR | 未预期的异常 |
 
 ---
@@ -445,9 +576,12 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
     ├── previews/                # 导入预演报告目录（同一批次可多次预演，不覆盖）
     │   ├── previews_index.json  # 预演索引
     │   └── preview-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次预演完整报告
-    └── signoffs/                # 签收核销报告目录（同一批次可多次导入，不静默覆盖）
-        ├── signoffs_index.json          # 签收索引
-        ├── signoff-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次签收完整报告
-        ├── signoff_audit_log.jsonl      # 签收更正/撤销审计日志（JSON Lines，每条含操作人、原因、原值、新值、版本号）
-        └── signoff_room_versions.json   # 每个考场的签收版本号（每次更正/撤销递增）
+    ├── signoffs/                # 签收核销报告目录（同一批次可多次导入，不静默覆盖）
+    │   ├── signoffs_index.json          # 签收索引
+    │   ├── signoff-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次签收完整报告
+    │   ├── signoff_audit_log.jsonl      # 签收更正/撤销审计日志（JSON Lines，每条含操作人、原因、原值、新值、版本号）
+    │   └── signoff_room_versions.json   # 每个考场的签收版本号（每次更正/撤销递增）
+    └── incidents/               # 异常处置单目录
+        ├── incidents_index.json         # 处置单索引
+        └── incident-YYYYMMDD-HHMMSS-xxxxxx.json  # 单个异常处置单（含处理记录）
 ```
