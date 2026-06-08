@@ -1,0 +1,40 @@
+{
+  "batch_id": "batch-20260608-195601-90e251",
+  "saved_at": "2026-06-08T19:58:45.165524",
+  "items": [
+    {
+      "room_row": {
+        "exam_id": "20260608",
+        "room_id": "A101",
+        "subject": "math",
+        "students_count": 30,
+        "source_file": "paper_math_v1.pdf",
+        "target_name": "20260608_A101_math",
+        "line_no": 2
+      },
+      "source_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\papers\\paper_math_v1.pdf",
+      "target_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\output\\20260608_A101_math.zip",
+      "source_sha256": "7b75338a36a99f71434b3eb0c8d18469da1a3067ae81f039323e50f54dcfa7e1",
+      "target_sha256": "20bdec40f5b1f02883789b78a7bbcc5639a823427eedc2d92cae8d2d51ea6b28",
+      "dispatched": true,
+      "error": null
+    },
+    {
+      "room_row": {
+        "exam_id": "20260608",
+        "room_id": "B201",
+        "subject": "english",
+        "students_count": 35,
+        "source_file": "paper_english_v2.pdf",
+        "target_name": "20260608_B201_english",
+        "line_no": 3
+      },
+      "source_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\papers\\paper_english_v2.pdf",
+      "target_path": "D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\output\\20260608_B201_english.zip",
+      "source_sha256": "d12e52dfceb1f1c2b0434028b82577f02564c5f84456819c9d9977d1b2a43614",
+      "target_sha256": "f376b8fd03555360cf9e604181b5695d475f61b12ee3b69cc88d0a5e88a6bcd5",
+      "dispatched": true,
+      "error": null
+    }
+  ]
+}

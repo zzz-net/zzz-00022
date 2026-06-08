@@ -1,0 +1,77 @@
+*** Begin Patch
+*** Delete File: C:\Users\admin\Desktop\solocode-workflow\control\projects\zzz-00022\phases\p06\attempts\a01\review_result.json
+*** Add File: C:\Users\admin\Desktop\solocode-workflow\control\projects\zzz-00022\phases\p06\attempts\a01\review_result.json
+{
+  "repo_id": "zzz-00022",
+  "phase_no": 6,
+  "attempt_id": "zzz-00022-6-a01",
+  "task_type": "zero_to_one",
+  "verdict": "fail",
+  "dissatisfaction_reasons": {
+    "product": "incident-create允许dry_run_passed批次和X999/biology建单并写入export.json，考务无法按发放状态判断处置单有效性。",
+    "process": "process_trace里TodoWrite仍写in_progress，模型只改tests/test_cli.py后即总结完成，漏掉未发放建单验证。"
+  },
+  "process_review": {
+    "angles": [
+      "任务规划",
+      "总结正确"
+    ],
+    "evidence": [
+      "process_trace.md 6128-6162 的 TodoWrite 仍把覆盖所有场景标为 in_progress，后续没有补齐与未发放建单相关的命令或验证记录。",
+      "process_trace.md 6333-6370 显示模型对 tests/test_cli.py 做 Edit 追加 incident 测试，样例集中围绕 _dispatch_successful_batch 与 pytest，最后仍给出已完成总结。"
+    ],
+    "source_path": "C:\\Users\\admin\\Desktop\\solocode-workflow\\control\\projects\\zzz-00022\\phases\\p06\\attempts\\a01\\process_trace.md"
+  },
+  "executed_commands": [
+    {
+      "command": "python -m compileall exam_paper_dispatcher",
+      "workdir": "D:\\workSpace\\AI__SPACE\\zzz-00022",
+      "exit_code": 0,
+      "summary": "项目源码编译检查通过。"
+    },
+    {
+      "command": "python -m exam_paper_dispatcher.cli --help",
+      "workdir": "D:\\workSpace\\AI__SPACE\\zzz-00022",
+      "exit_code": 0,
+      "summary": "CLI 可正常启动，incident-create/list/handle/close 命令已注册。"
+    },
+    {
+      "command": "pytest -q tests/test_cli.py -k 'incident or cli_help_mentions_incident or readme'",
+      "workdir": "D:\\workSpace\\AI__SPACE\\zzz-00022",
+      "exit_code": 0,
+      "summary": "相关自带测试 21 项通过，但未覆盖未发放建单与批次外考场建单。"
+    },
+    {
+      "command": "python -m exam_paper_dispatcher.cli --storage-dir 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\state' precheck --config 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\config.json' --rooms 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\rooms.csv'",
+      "workdir": "D:\\workSpace\\AI__SPACE\\zzz-00022",
+      "exit_code": 0,
+      "summary": "reviewer 自建输入完成预检，批次状态为 dry_run_passed。"
+    },
+    {
+      "command": "python -m exam_paper_dispatcher.cli --storage-dir 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\state' incident-create --batch-id batch-20260608-195601-90e251 --exam-id 20260608 --room-id A101 --subject math --type package_damaged --description '发放前人工登记测试' --operator reviewer --attachment 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\attachment.txt'",
+      "workdir": "D:\\workSpace\\AI__SPACE\\zzz-00022",
+      "exit_code": 0,
+      "summary": "失败链路应被拒绝，但 dry_run_passed 批次实际成功创建处置单。"
+    },
+    {
+      "command": "python -m exam_paper_dispatcher.cli --storage-dir 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\state' incident-create --batch-id batch-20260608-195601-90e251 --exam-id 20260608 --room-id X999 --subject biology --type other --description '批次外考场测试' --operator reviewer",
+      "workdir": "D:\\workSpace\\AI__SPACE\\zzz-00022",
+      "exit_code": 0,
+      "summary": "非法输入链路应被拒绝，但批次外考场 X999/biology 仍成功建单。"
+    },
+    {
+      "command": "python -m exam_paper_dispatcher.cli --storage-dir 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\state' dispatch --batch-id batch-20260608-195601-90e251",
+      "workdir": "D:\\workSpace\\AI__SPACE\\zzz-00022",
+      "exit_code": 0,
+      "summary": "主成功链路可正常发放 2/2 个试卷包。"
+    },
+    {
+      "command": "python -m exam_paper_dispatcher.cli --storage-dir 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\state' export --format json --output 'D:\\workSpace\\AI__SPACE\\zzz-00022\\.review_artifacts\\manual_review\\export.json'",
+      "workdir": "D:\\workSpace\\AI__SPACE\\zzz-00022",
+      "exit_code": 0,
+      "summary": "状态保持链路验证通过，重读导出文件可见两个 open incident，其中包含 X999/biology。"
+    }
+  ],
+  "business_test_summary": "产物不满意：incident-create允许dry_run_passed批次和X999/biology建单并写入export.json，考务无法按发放状态判断处置单有效性。过程不满意：process_trace里TodoWrite仍写in_progress，模型只改tests/test_cli.py后即总结完成，漏掉未发放建单验证。"
+}
+*** End Patch

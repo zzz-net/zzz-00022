@@ -1,0 +1,26 @@
+{
+  "incident-20260608-195816-6879d3": {
+    "ticket_id": "incident-20260608-195816-6879d3",
+    "created_at": "2026-06-08T19:58:16.997588",
+    "status": "open",
+    "exam_id": "20260608",
+    "room_id": "A101",
+    "subject": "math",
+    "incident_type": "package_damaged",
+    "operator": "reviewer",
+    "closed_at": null,
+    "handling_count": 0
+  },
+  "incident-20260608-195816-b05706": {
+    "ticket_id": "incident-20260608-195816-b05706",
+    "created_at": "2026-06-08T19:58:16.997588",
+    "status": "open",
+    "exam_id": "20260608",
+    "room_id": "X999",
+    "subject": "biology",
+    "incident_type": "other",
+    "operator": "reviewer",
+    "closed_at": null,
+    "handling_count": 0
+  }
+}

@@ -3160,6 +3160,7 @@ def test_readme_incident_exit_codes_match_models():
         (ExitCode.INCIDENT_NOT_FOUND, "INCIDENT_NOT_FOUND"),
         (ExitCode.INCIDENT_ALREADY_CLOSED, "INCIDENT_ALREADY_CLOSED"),
         (ExitCode.INCIDENT_INVALID_FIELD, "INCIDENT_INVALID_FIELD"),
+        (ExitCode.INCIDENT_BATCH_NOT_DISPATCHED, "INCIDENT_BATCH_NOT_DISPATCHED"),
     ]
     for code, name in exit_codes:
         assert str(code) in readme, f"README 缺少退出码 {code} ({name})"
@@ -3185,14 +3186,223 @@ def test_cli_help_mentions_incident(runner):
     for kw in ("batch-id", "exam-id", "room-id", "subject", "type",
                "description", "operator", "attachment"):
         assert kw in help_text, f"incident-create --help 缺少选项: {kw}"
+    assert "已发放" in help_text or "completed" in help_text, \
+        "incident-create --help 未说明只有已发放批次才能建单"
+    assert "审计日志" in help_text, \
+        "incident-create --help 未说明会写入审计日志"
 
     r = runner.invoke(main, ["incident-handle", "--help"])
     help_text = r.stdout + (r.stderr or "")
     for kw in ("batch-id", "ticket-id", "operator", "action", "note", "to-status"):
         assert kw in help_text, f"incident-handle --help 缺少选项: {kw}"
+    assert "审计日志" in help_text, \
+        "incident-handle --help 未说明会写入审计日志"
 
     r = runner.invoke(main, ["incident-close", "--help"])
     help_text = r.stdout + (r.stderr or "")
     for kw in ("batch-id", "ticket-id", "operator", "reason"):
         assert kw in help_text, f"incident-close --help 缺少选项: {kw}"
+    assert "审计日志" in help_text, \
+        "incident-close --help 未说明会写入审计日志"
+
+
+# ---------------------------------------------------------------------------
+# 44. incident-create: 未发放批次被拒绝
+# ---------------------------------------------------------------------------
+
+def test_incident_rejected_before_dispatch(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck",
+            "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert batch.status.value != "completed"
+    assert batch.status.value != "rolled_back"
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-create",
+            "--batch-id", bid,
+            "--exam-id", "20260608",
+            "--room-id", "A101",
+            "--subject", "math",
+            "--type", "package_damaged",
+            "--description", "测试未发放拒绝",
+            "--operator", "张老师",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.INCIDENT_BATCH_NOT_DISPATCHED, \
+        f"got {r.exit_code}, stdout={r.stdout}"
+    combined = r.stdout + (r.stderr or "")
+    assert ("完成发放" in combined) or ("completed" in combined) or ("已发放" in combined)
+
+    batch2 = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch2.list_incident_ids()) == 0
+    assert len(batch2.load_incident_audit_log()) == 0
+
+
+# ---------------------------------------------------------------------------
+# 45. incident: 审计日志跨重启一致性 + query/export/audit-pack 包含审计日志
+# ---------------------------------------------------------------------------
+
+def test_incident_audit_log_consistency(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+
+    t1 = _create_sample_incident(runner, env, bid, room_id="A101", subject="math")
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid,
+            "--ticket-id", t1,
+            "--operator", "李主任",
+            "--action", "联系考场确认情况",
+            "--note", "考场反馈第3份有轻微压痕",
+            "--to-status", "processing",
+        ],
+        catch_exceptions=False,
+    )
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-close",
+            "--batch-id", bid,
+            "--ticket-id", t1,
+            "--operator", "主考",
+            "--reason", "考生正常使用，无需更换",
+        ],
+        catch_exceptions=False,
+    )
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    audit_log_before = batch.load_incident_audit_log()
+    assert len(audit_log_before) == 3
+    actions = [a.action.value for a in audit_log_before]
+    assert "create" in actions
+    assert "handle" in actions
+    assert "close" in actions
+    for entry in audit_log_before:
+        assert entry.ticket_id == t1
+        assert entry.batch_id == bid
+        assert entry.timestamp is not None
+        assert entry.operator is not None
+
+    out_json = env["tmp_path"] / "incident_audit_before.json"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "export", "--format", "json", "--output", str(out_json),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    data = json.loads(out_json.read_text(encoding="utf-8"))
+    b = data["batches"][0]
+    assert "incident_audit_log" in b
+    assert len(b["incident_audit_log"]) == 3
+    assert b["incidents"]["audit_count"] == 3
+
+    out_zip = env["tmp_path"] / "audit_incident_audit.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid, "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        names = set(zf.namelist())
+        assert "incident_audit_log.jsonl" in names
+        audit_raw = zf.read("incident_audit_log.jsonl").decode("utf-8")
+        audit_lines = [l for l in audit_raw.split("\n") if l.strip()]
+        assert len(audit_lines) == 3
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["counts"]["incident_audit_total"] == 3
+        readme = zf.read("README.txt").decode("utf-8")
+        assert "审计日志总数" in readme
+
+    Storage2 = Storage
+    storage2 = Storage2(env["storage_dir"])
+    batch2 = storage2.get_batch(bid)
+    audit_log_after = batch2.load_incident_audit_log()
+    assert len(audit_log_after) == 3
+    for before, after in zip(audit_log_before, audit_log_after):
+        assert before.audit_id == after.audit_id
+        assert before.action == after.action
+        assert before.operator == after.operator
+        assert before.ticket_id == after.ticket_id
+        assert before.batch_id == after.batch_id
+
+
+# ---------------------------------------------------------------------------
+# 46. incident: 追加处理记录后审计日志正确
+# ---------------------------------------------------------------------------
+
+def test_incident_handle_appends_audit_log(runner, fresh_env):
+    env = fresh_env
+    bid = _dispatch_successful_batch(runner, env)
+    ticket_id = _create_sample_incident(runner, env, bid, room_id="A101", subject="math")
+
+    batch = Storage(env["storage_dir"]).get_batch(bid)
+    assert len(batch.load_incident_audit_log()) == 1
+
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "巡考A",
+            "--action", "第一次处理",
+            "--note", "初步核实",
+        ],
+        catch_exceptions=False,
+    )
+    assert len(batch.load_incident_audit_log()) == 2
+
+    runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "incident-handle",
+            "--batch-id", bid,
+            "--ticket-id", ticket_id,
+            "--operator", "巡考B",
+            "--action", "第二次处理",
+            "--note", "确认解决方案",
+            "--to-status", "processing",
+        ],
+        catch_exceptions=False,
+    )
+    assert len(batch.load_incident_audit_log()) == 3
+
+    audit_log = batch.load_incident_audit_log()
+    handle_entries = [a for a in audit_log if a.action.value == "handle"]
+    assert len(handle_entries) == 2
+    assert handle_entries[0].operator == "巡考A"
+    assert handle_entries[1].operator == "巡考B"
+    assert handle_entries[1].status_after == "processing"
+
+    ticket = batch.load_incident(ticket_id)
+    assert len(ticket.handling_records) == 2
 

@@ -1,0 +1,122 @@
+{
+  "batches": [
+    {
+      "batch_id": "batch-20260608-195601-90e251",
+      "status": "dry_run_passed",
+      "created_at": "2026-06-08T19:56:01.217129",
+      "updated_at": "2026-06-08T19:56:01.233234",
+      "csv_path": ".review_artifacts\\manual_review\\rooms.csv",
+      "total_items": 2,
+      "success_count": 0,
+      "fail_count": 0,
+      "notes": "预检通过: 2/2 项",
+      "precheck": {
+        "passed": true,
+        "total_rows": 2,
+        "valid_rows": 2,
+        "missing_sources": [],
+        "target_conflicts": [],
+        "invalid_subjects": [],
+        "invalid_versions": [],
+        "checked_at": "2026-06-08T19:56:01.231257"
+      },
+      "signoff": {
+        "has_signoff": false
+      },
+      "incidents": {
+        "count": 2,
+        "total": 2,
+        "open_count": 2,
+        "open": 2,
+        "processing_count": 0,
+        "processing": 0,
+        "closed_count": 0,
+        "closed": 0,
+        "has_incident": true,
+        "tickets": [
+          {
+            "ticket_id": "incident-20260608-195816-6879d3",
+            "created_at": "2026-06-08T19:58:16.997588",
+            "status": "open",
+            "exam_id": "20260608",
+            "room_id": "A101",
+            "subject": "math",
+            "incident_type": "package_damaged",
+            "incident_type_label": "试卷包损坏",
+            "operator": "reviewer",
+            "handling_count": 0,
+            "closed_at": null
+          },
+          {
+            "ticket_id": "incident-20260608-195816-b05706",
+            "created_at": "2026-06-08T19:58:16.997588",
+            "status": "open",
+            "exam_id": "20260608",
+            "room_id": "X999",
+            "subject": "biology",
+            "incident_type": "other",
+            "incident_type_label": "其他问题",
+            "operator": "reviewer",
+            "handling_count": 0,
+            "closed_at": null
+          }
+        ],
+        "items": [
+          {
+            "ticket_id": "incident-20260608-195816-6879d3",
+            "created_at": "2026-06-08T19:58:16.997588",
+            "status": "open",
+            "exam_id": "20260608",
+            "room_id": "A101",
+            "subject": "math",
+            "incident_type": "package_damaged",
+            "incident_type_label": "试卷包损坏",
+            "operator": "reviewer",
+            "handling_count": 0,
+            "closed_at": null
+          },
+          {
+            "ticket_id": "incident-20260608-195816-b05706",
+            "created_at": "2026-06-08T19:58:16.997588",
+            "status": "open",
+            "exam_id": "20260608",
+            "room_id": "X999",
+            "subject": "biology",
+            "incident_type": "other",
+            "incident_type_label": "其他问题",
+            "operator": "reviewer",
+            "handling_count": 0,
+            "closed_at": null
+          }
+        ],
+        "index": {
+          "incident-20260608-195816-6879d3": {
+            "ticket_id": "incident-20260608-195816-6879d3",
+            "created_at": "2026-06-08T19:58:16.997588",
+            "status": "open",
+            "exam_id": "20260608",
+            "room_id": "A101",
+            "subject": "math",
+            "incident_type": "package_damaged",
+            "operator": "reviewer",
+            "closed_at": null,
+            "handling_count": 0
+          },
+          "incident-20260608-195816-b05706": {
+            "ticket_id": "incident-20260608-195816-b05706",
+            "created_at": "2026-06-08T19:58:16.997588",
+            "status": "open",
+            "exam_id": "20260608",
+            "room_id": "X999",
+            "subject": "biology",
+            "incident_type": "other",
+            "operator": "reviewer",
+            "closed_at": null,
+            "handling_count": 0
+          }
+        }
+      }
+    }
+  ],
+  "events_log": "[2026-06-08T19:56:01.218122] [batch-20260608-195601-90e251] 保存配置快照 (csv=.review_artifacts\\manual_review\\rooms.csv)\n[2026-06-08T19:56:01.232567] [batch-20260608-195601-90e251] 保存预检报告: 通过, 2 项\n[2026-06-08T19:56:01.233234] [batch-20260608-195601-90e251] 状态变更 -> dry_run_passed: 预检通过: 2/2 项\n[2026-06-08T19:58:16.997588] [batch-20260608-195601-90e251] 异常处置单: incident-20260608-195816-6879d3, type=package_damaged, room=A101/math, status=open\n[2026-06-08T19:58:17.000214] [batch-20260608-195601-90e251] 异常处置单: incident-20260608-195816-b05706, type=other, room=X999/biology, status=open\n"
+}

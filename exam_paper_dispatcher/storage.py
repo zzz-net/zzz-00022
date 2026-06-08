@@ -21,11 +21,14 @@ from .models import (
     gen_signoff_audit_id,
     IncidentTicket,
     IncidentStatus,
+    IncidentAuditEntry,
+    IncidentAuditAction,
     INCIDENT_AUDIT_LOG_FILE,
     INCIDENTS_DIR,
     INCIDENT_INDEX_FILE,
     gen_incident_id,
     gen_incident_handling_id,
+    gen_incident_audit_id,
 )
 
 
@@ -450,6 +453,32 @@ class BatchState:
 
     def _get_incident_audit_log_path(self) -> Path:
         return self._get_incidents_dir() / INCIDENT_AUDIT_LOG_FILE
+
+    def append_incident_audit(self, entry: IncidentAuditEntry) -> None:
+        incidents_dir = self._get_incidents_dir()
+        incidents_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = self._get_incident_audit_log_path()
+        line = json.dumps(entry.model_dump(mode="json"), ensure_ascii=False) + "\n"
+        with audit_path.open("a", encoding="utf-8") as f:
+            f.write(line)
+        self._log_event(
+            f"异常处置单审计: action={entry.action.value}, "
+            f"ticket={entry.ticket_id}, "
+            f"room={entry.room_id}/{entry.subject}, "
+            f"operator={entry.operator}"
+        )
+
+    def load_incident_audit_log(self) -> list[IncidentAuditEntry]:
+        audit_path = self._get_incident_audit_log_path()
+        if not audit_path.exists():
+            return []
+        entries: list[IncidentAuditEntry] = []
+        with audit_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    entries.append(IncidentAuditEntry.model_validate_json(line))
+        return entries
 
     def save_incident(self, ticket: IncidentTicket) -> Path:
         incidents_dir = self._get_incidents_dir()

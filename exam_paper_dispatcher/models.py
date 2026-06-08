@@ -47,6 +47,7 @@ class ExitCode:
     INCIDENT_ALREADY_CLOSED = 34
     INCIDENT_INVALID_FIELD = 35
     INCIDENT_AUDIT_OUTPUT_ERROR = 36
+    INCIDENT_BATCH_NOT_DISPATCHED = 37
     UNKNOWN_ERROR = 99
 
 
@@ -323,4 +324,30 @@ def gen_incident_id() -> str:
 def gen_incident_handling_id() -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"incident-handling-{ts}-{uuid.uuid4().hex[:6]}"
+
+
+class IncidentAuditAction(str, Enum):
+    CREATE = "create"
+    HANDLE = "handle"
+    CLOSE = "close"
+
+
+class IncidentAuditEntry(BaseModel):
+    audit_id: str
+    batch_id: str
+    ticket_id: str
+    exam_id: str
+    room_id: str
+    subject: str
+    action: IncidentAuditAction
+    operator: str
+    detail: str = ""
+    status_before: Optional[str] = None
+    status_after: Optional[str] = None
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+def gen_incident_audit_id() -> str:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"incident-audit-{ts}-{uuid.uuid4().hex[:6]}"
 

@@ -52,6 +52,7 @@ SIGNOFF_VERSIONS_EXPORT = "signoff_room_versions.json"
 
 INCIDENT_SUMMARY_FILE = "incident_summary.json"
 INCIDENT_INDEX_EXPORT = "incidents_index.json"
+INCIDENT_AUDIT_EXPORT = "incident_audit_log.jsonl"
 
 
 class AuditPackError(Exception):
@@ -156,6 +157,13 @@ def _collect_batch_payload(batch: BatchState, storage: Storage) -> dict[str, byt
                     tkt.model_dump(mode="json"), ensure_ascii=False, indent=2
                 ).encode("utf-8")
 
+        incident_audit_log = batch.load_incident_audit_log()
+        if incident_audit_log:
+            lines = []
+            for entry in incident_audit_log:
+                lines.append(json.dumps(entry.model_dump(mode="json"), ensure_ascii=False))
+            payload[INCIDENT_AUDIT_EXPORT] = ("\n".join(lines) + "\n").encode("utf-8")
+
     return payload
 
 
@@ -196,6 +204,7 @@ def _build_readme(batch: BatchState, payload: dict[str, bytes]) -> str:
         lines.append(f"  未处理(open)  : {incident.get('open_count', 0)}")
         lines.append(f"  处理中        : {incident.get('processing_count', 0)}")
         lines.append(f"  已关闭        : {incident.get('closed_count', 0)}")
+        lines.append(f"  审计日志总数  : {incident.get('audit_count', 0)}")
         lines.append("")
 
     lines.append("包含文件:")
@@ -269,12 +278,14 @@ def _build_manifest(batch: BatchState, payload: dict[str, bytes]) -> dict:
     incident_open = 0
     incident_processing = 0
     incident_closed = 0
+    incident_audit_total = 0
     if INCIDENT_SUMMARY_FILE in payload:
         summary = json.loads(payload[INCIDENT_SUMMARY_FILE].decode("utf-8"))
         incident_count = summary.get("count", 0)
         incident_open = summary.get("open_count", 0)
         incident_processing = summary.get("processing_count", 0)
         incident_closed = summary.get("closed_count", 0)
+        incident_audit_total = summary.get("audit_count", 0)
 
     return {
         "schema_version": "1.0",
@@ -296,6 +307,7 @@ def _build_manifest(batch: BatchState, payload: dict[str, bytes]) -> dict:
             "incident_open": incident_open,
             "incident_processing": incident_processing,
             "incident_closed": incident_closed,
+            "incident_audit_total": incident_audit_total,
         },
         "files_sha256": files_sha,
     }

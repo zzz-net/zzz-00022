@@ -1,0 +1,17 @@
+{
+  "ticket_id": "incident-20260608-195816-b05706",
+  "batch_id": "batch-20260608-195601-90e251",
+  "exam_id": "20260608",
+  "room_id": "X999",
+  "subject": "biology",
+  "incident_type": "other",
+  "description": "批次外考场测试",
+  "operator": "reviewer",
+  "created_at": "2026-06-08T19:58:16.997588",
+  "status": "open",
+  "closed_at": null,
+  "closed_by": null,
+  "close_reason": "",
+  "attachment_paths": [],
+  "handling_records": []
+}

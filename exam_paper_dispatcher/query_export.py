@@ -101,6 +101,10 @@ def query_batch(storage: Storage, batch_id: str) -> Optional[dict]:
     incident_summary = build_incident_summary(batch)
     result["incidents"] = incident_summary
 
+    incident_audit_log = batch.load_incident_audit_log()
+    if incident_audit_log:
+        result["incident_audit_log"] = [a.model_dump() for a in incident_audit_log]
+
     return result
 
 
@@ -130,6 +134,7 @@ def list_batches(storage: Storage, status_filter: Optional[str] = None) -> list[
         d["incident_open_count"] = incident_summary.get("open_count", 0)
         d["incident_processing_count"] = incident_summary.get("processing_count", 0)
         d["incident_closed_count"] = incident_summary.get("closed_count", 0)
+        d["incident_audit_count"] = incident_summary.get("audit_count", 0)
 
         result.append(d)
     return result
@@ -172,7 +177,7 @@ def export_batches_csv(
         "signoff_count", "signoff_status", "signoff_signed_rooms",
         "signoff_abnormal_count", "signoff_last_imported_at",
         "signoff_audit_count", "signoff_corrected_count", "signoff_revoked_count",
-        "incident_count", "incident_open_count", "incident_processing_count", "incident_closed_count",
+        "incident_count", "incident_open_count", "incident_processing_count", "incident_closed_count", "incident_audit_count",
     ]
     with out.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -196,6 +201,7 @@ def export_batches_csv(
             row["incident_open_count"] = incident_summary.get("open_count", 0)
             row["incident_processing_count"] = incident_summary.get("processing_count", 0)
             row["incident_closed_count"] = incident_summary.get("closed_count", 0)
+            row["incident_audit_count"] = incident_summary.get("audit_count", 0)
             writer.writerow(row)
     return out
 

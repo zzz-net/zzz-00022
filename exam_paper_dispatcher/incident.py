@@ -11,11 +11,17 @@ from .models import (
     IncidentStatus,
     IncidentType,
     IncidentHandlingRecord,
+    IncidentAuditEntry,
+    IncidentAuditAction,
     INCIDENT_TYPE_LABELS,
     gen_incident_id,
     gen_incident_handling_id,
+    gen_incident_audit_id,
 )
 from .storage import BatchState, Storage
+
+
+DISPATCHED_BATCH_STATUSES = {BatchStatus.COMPLETED, BatchStatus.ROLLED_BACK}
 
 
 class IncidentError(Exception):
@@ -24,6 +30,41 @@ class IncidentError(Exception):
         self.message = message
         self.exit_code = exit_code
         self.details = details or {}
+
+
+def can_create_incident_for_batch(batch: BatchState) -> tuple[bool, Optional[IncidentError]]:
+    if batch.status not in DISPATCHED_BATCH_STATUSES:
+        return False, IncidentError(
+            f"批次 {batch.batch_id} 状态为 {batch.status.value}，"
+            f"必须完成发放 (completed) 或已回滚 (rolled_back) 才能登记异常处置单",
+            exit_code=ExitCode.INCIDENT_BATCH_NOT_DISPATCHED,
+            details={"batch_id": batch.batch_id, "batch_status": batch.status.value},
+        )
+    return True, None
+
+
+def find_open_incident_by_room(
+    batch: BatchState, exam_id: str, room_id: str, subject: str
+) -> Optional[IncidentTicket]:
+    return batch.find_open_incident_by_room(exam_id, room_id, subject)
+
+
+def check_room_incident_conflict(
+    batch: BatchState, exam_id: str, room_id: str, subject: str
+) -> tuple[bool, Optional[IncidentError]]:
+    existing = find_open_incident_by_room(batch, exam_id, room_id, subject)
+    if existing is not None:
+        return True, IncidentError(
+            f"同一考场 ({room_id}/{subject}) 存在未关闭的异常处置单: {existing.ticket_id}",
+            exit_code=ExitCode.INCIDENT_CONFLICT,
+            details={
+                "existing_ticket_id": existing.ticket_id,
+                "existing_type": existing.incident_type.value,
+                "existing_status": existing.status.value,
+                "existing_created_at": existing.created_at,
+            },
+        )
+    return False, None
 
 
 def _validate_batch_room(batch: BatchState, exam_id: str, room_id: str, subject: str) -> tuple[bool, Optional[str]]:
@@ -50,6 +91,60 @@ def _validate_attachment_paths(paths: list[str]) -> tuple[bool, list[str]]:
     return len(invalid) == 0, invalid
 
 
+def _write_create_audit(batch: BatchState, ticket: IncidentTicket) -> None:
+    entry = IncidentAuditEntry(
+        audit_id=gen_incident_audit_id(),
+        batch_id=batch.batch_id,
+        ticket_id=ticket.ticket_id,
+        exam_id=ticket.exam_id,
+        room_id=ticket.room_id,
+        subject=ticket.subject,
+        action=IncidentAuditAction.CREATE,
+        operator=ticket.operator,
+        detail=f"type={ticket.incident_type.value}; description={ticket.description[:200]}",
+        status_before=None,
+        status_after=ticket.status.value,
+    )
+    batch.append_incident_audit(entry)
+
+
+def _write_handle_audit(
+    batch: BatchState, ticket: IncidentTicket, record: IncidentHandlingRecord,
+    status_before: str, status_after: str,
+) -> None:
+    entry = IncidentAuditEntry(
+        audit_id=gen_incident_audit_id(),
+        batch_id=batch.batch_id,
+        ticket_id=ticket.ticket_id,
+        exam_id=ticket.exam_id,
+        room_id=ticket.room_id,
+        subject=ticket.subject,
+        action=IncidentAuditAction.HANDLE,
+        operator=record.operator,
+        detail=f"action={record.action}; note={record.note[:200]}",
+        status_before=status_before,
+        status_after=status_after,
+    )
+    batch.append_incident_audit(entry)
+
+
+def _write_close_audit(batch: BatchState, ticket: IncidentTicket) -> None:
+    entry = IncidentAuditEntry(
+        audit_id=gen_incident_audit_id(),
+        batch_id=batch.batch_id,
+        ticket_id=ticket.ticket_id,
+        exam_id=ticket.exam_id,
+        room_id=ticket.room_id,
+        subject=ticket.subject,
+        action=IncidentAuditAction.CLOSE,
+        operator=ticket.closed_by or "",
+        detail=f"close_reason={ticket.close_reason[:200]}",
+        status_before=IncidentStatus.OPEN.value,
+        status_after=IncidentStatus.CLOSED.value,
+    )
+    batch.append_incident_audit(entry)
+
+
 def create_incident(
     storage: Storage,
     batch: BatchState,
@@ -62,24 +157,25 @@ def create_incident(
     attachment_paths: Optional[list[str]] = None,
 ) -> tuple[IncidentTicket, Optional[IncidentError]]:
     attachment_paths = attachment_paths or []
+    empty_ticket = IncidentTicket(
+        ticket_id="", batch_id=batch.batch_id,
+        exam_id=exam_id, room_id=room_id, subject=subject,
+        incident_type=incident_type, description="", operator=operator,
+    )
+
+    ok, err = can_create_incident_for_batch(batch)
+    if not ok:
+        return empty_ticket, err
 
     if not description.strip():
-        return IncidentTicket(
-            ticket_id="", batch_id=batch.batch_id,
-            exam_id=exam_id, room_id=room_id, subject=subject,
-            incident_type=incident_type, description="", operator=operator,
-        ), IncidentError(
+        return empty_ticket, IncidentError(
             "异常说明不能为空",
             exit_code=ExitCode.INCIDENT_INVALID_FIELD,
             details={"field": "description"},
         )
 
     if not operator.strip():
-        return IncidentTicket(
-            ticket_id="", batch_id=batch.batch_id,
-            exam_id=exam_id, room_id=room_id, subject=subject,
-            incident_type=incident_type, description="", operator="",
-        ), IncidentError(
+        return empty_ticket, IncidentError(
             "操作人不能为空",
             exit_code=ExitCode.INCIDENT_INVALID_FIELD,
             details={"field": "operator"},
@@ -87,32 +183,15 @@ def create_incident(
 
     valid, invalid = _validate_attachment_paths(attachment_paths)
     if not valid:
-        return IncidentTicket(
-            ticket_id="", batch_id=batch.batch_id,
-            exam_id=exam_id, room_id=room_id, subject=subject,
-            incident_type=incident_type, description=description, operator=operator,
-        ), IncidentError(
+        return empty_ticket, IncidentError(
             "附件路径校验失败",
             exit_code=ExitCode.INCIDENT_INVALID_FIELD,
             details={"invalid_paths": invalid},
         )
 
-    existing = batch.find_open_incident_by_room(exam_id, room_id, subject)
-    if existing is not None:
-        return IncidentTicket(
-            ticket_id="", batch_id=batch.batch_id,
-            exam_id=exam_id, room_id=room_id, subject=subject,
-            incident_type=incident_type, description=description, operator=operator,
-        ), IncidentError(
-            f"同一考场 ({room_id}/{subject}) 存在未关闭的异常处置单: {existing.ticket_id}",
-            exit_code=ExitCode.INCIDENT_CONFLICT,
-            details={
-                "existing_ticket_id": existing.ticket_id,
-                "existing_type": existing.incident_type.value,
-                "existing_status": existing.status.value,
-                "existing_created_at": existing.created_at,
-            },
-        )
+    has_conflict, conflict_err = check_room_incident_conflict(batch, exam_id, room_id, subject)
+    if has_conflict:
+        return empty_ticket, conflict_err
 
     ticket_id = gen_incident_id()
     ticket = IncidentTicket(
@@ -129,6 +208,7 @@ def create_incident(
 
     try:
         batch.save_incident(ticket)
+        _write_create_audit(batch, ticket)
     except OSError as e:
         return ticket, IncidentError(
             f"保存异常处置单失败: {e}",
@@ -176,6 +256,8 @@ def handle_incident(
             details={"field": "action"},
         )
 
+    status_before = ticket.status.value
+
     record = IncidentHandlingRecord(
         record_id=gen_incident_handling_id(),
         ticket_id=ticket_id,
@@ -188,8 +270,11 @@ def handle_incident(
     if new_status is not None and new_status != ticket.status:
         ticket.status = new_status
 
+    status_after = ticket.status.value
+
     try:
         batch.save_incident(ticket)
+        _write_handle_audit(batch, ticket, record, status_before, status_after)
     except OSError as e:
         return ticket, IncidentError(
             f"保存异常处置单失败: {e}",
@@ -235,6 +320,7 @@ def close_incident(
 
     try:
         batch.save_incident(ticket)
+        _write_close_audit(batch, ticket)
     except OSError as e:
         return ticket, IncidentError(
             f"保存异常处置单失败: {e}",
@@ -283,6 +369,7 @@ def get_incident_detail(batch: BatchState, ticket_id: str) -> Optional[dict]:
 def build_incident_summary(batch: BatchState) -> dict:
     count = batch.count_incidents()
     tickets = batch.load_all_incidents()
+    audit_log = batch.load_incident_audit_log()
     summary = {
         "count": count["total"],
         "total": count["total"],
@@ -293,6 +380,7 @@ def build_incident_summary(batch: BatchState) -> dict:
         "closed_count": count["closed"],
         "closed": count["closed"],
         "has_incident": count["total"] > 0,
+        "audit_count": len(audit_log),
     }
     ticket_items = []
     for t in tickets:
@@ -317,4 +405,6 @@ def build_incident_summary(batch: BatchState) -> dict:
     else:
         summary["tickets"] = []
         summary["items"] = []
+    if audit_log:
+        summary["audit_log"] = [a.model_dump() for a in audit_log]
     return summary

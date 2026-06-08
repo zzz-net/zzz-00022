@@ -241,7 +241,7 @@ python -m exam_paper_dispatcher.cli signoff \
 
 ## 异常处置单 (incident-*)
 
-考务人员在发放后如发现试卷包损坏、错装、临时换考场等问题，可登记成异常处置单（工单），而不是直接修改发放结果。处置单按批次持久化，重启 CLI 后仍可查询、处理和导出。
+考务人员在发放后如发现试卷包损坏、错装、临时换考场等问题，可登记成异常处置单（工单），而不是直接修改发放结果。处置单按批次持久化，重启 CLI 后仍可查询、处理和导出。**所有创建/处理/关闭操作均会写入独立的审计日志（JSON Lines 格式，`incidents/incident_audit_log.jsonl`）**，确保每一步操作可追溯。
 
 ### 字段说明
 
@@ -258,13 +258,17 @@ python -m exam_paper_dispatcher.cli signoff \
 
 每个处置单还包含：`created_at`(创建时间)、`status`(状态：open/processing/closed)、`closed_at`(关闭时间)、`closed_by`(关闭人)、`close_reason`(关闭原因)、`handling_records`(处理记录列表，每条含时间、操作人、处理动作、备注)。
 
+每条审计日志包含：`audit_id`(审计记录ID)、`ticket_id`(处置单ID)、`batch_id`(批次ID)、`exam_id`/`room_id`/`subject`(考场标识)、`action`(操作类型：create/handle/close)、`operator`(操作人)、`detail`(操作详情)、`status_before`(操作前状态)、`status_after`(操作后状态)、`timestamp`(时间戳)。
+
 ### 核心规则
 
-1. **同一考场未关闭工单冲突检测**：同一 `(exam_id, room_id, subject)` 存在状态非 `closed` 的处置单时，再次创建将被拒绝并提示冲突（退出码 32）。
-2. **追加处理记录而非覆盖**：处理处置单时通过 `incident-handle` 命令追加记录，不会静默覆盖已有内容。
-3. **关闭后不可操作**：`closed` 状态的处置单无法追加处理记录或再次关闭。
-4. **附件路径校验**：创建时校验附件路径存在且为文件，校验失败则拒绝创建。
-5. **原子写入**：保存失败时不留下半成品文件。
+1. **只有已发放批次才能建单**：批次状态必须为 `completed`（发放完成）或 `rolled_back`（已回滚），否则拒绝创建（退出码 37）。
+2. **同一考场未关闭工单冲突检测**：同一 `(exam_id, room_id, subject)` 存在状态非 `closed` 的处置单时，再次创建将被拒绝并提示冲突（退出码 32）。
+3. **处理/关闭必须留下可追溯记录**：每次 `incident-create`、`incident-handle`、`incident-close` 操作均写入独立审计日志，记录操作人、时间、状态变化和操作详情。
+4. **追加处理记录而非覆盖**：处理处置单时通过 `incident-handle` 命令追加记录，不会静默覆盖已有内容。
+5. **关闭后不可操作**：`closed` 状态的处置单无法追加处理记录或再次关闭。
+6. **附件路径校验**：创建时校验附件路径存在且为文件，校验失败则拒绝创建。
+7. **原子写入**：保存失败时不留下半成品文件。
 
 ### 1. 创建处置单 (incident-create)
 
@@ -285,6 +289,7 @@ python -m exam_paper_dispatcher.cli incident-create \
 - **退出码**：
   - `0` 创建成功
   - `7` 批次不存在
+  - `37` 批次尚未完成发放（必须为 completed 或 rolled_back 状态）
   - `32` 同一考场存在未关闭工单（冲突）
   - `35` 必填字段为空或附件路径无效
   - `10` I/O 错误
@@ -354,9 +359,9 @@ python -m exam_paper_dispatcher.cli incident-close \
   - `35` 操作人为空
 
 > 异常处置单数据按批次持久化（`storage_dir/batches/<batch_id>/incidents/`），重启 CLI 后：
-> - `query` 列表可查看每个批次的未处理/处理中/已关闭处置单数量
-> - `export JSON` 和 `export CSV`（批次摘要）自动附带处置单摘要
-> - `audit-pack` 会把所有处置单、处置单索引和摘要完整打入审计包
+> - `query` 列表可查看每个批次的未处理/处理中/已关闭处置单数量及审计日志总数
+> - `export JSON` 和 `export CSV`（批次摘要）自动附带处置单摘要及审计日志记录
+> - `audit-pack` 会把所有处置单、处置单索引、处置单摘要和审计日志完整打入审计包
 
 ---
 
@@ -540,6 +545,7 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
 | 34 | INCIDENT_ALREADY_CLOSED | 异常处置单已关闭，无法处理或再次关闭 |
 | 35 | INCIDENT_INVALID_FIELD | 异常处置单字段校验失败（必填项为空/附件路径无效） |
 | 36 | INCIDENT_AUDIT_OUTPUT_ERROR | 异常处置单日志写入失败 |
+| 37 | INCIDENT_BATCH_NOT_DISPATCHED | 批次尚未完成发放，无法创建异常处置单（必须为 completed 或 rolled_back） |
 | 99 | UNKNOWN_ERROR | 未预期的异常 |
 
 ---
@@ -583,5 +589,6 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
     │   └── signoff_room_versions.json   # 每个考场的签收版本号（每次更正/撤销递增）
     └── incidents/               # 异常处置单目录
         ├── incidents_index.json         # 处置单索引
+        ├── incident_audit_log.jsonl     # 异常处置单审计日志（JSON Lines，每条含操作人、时间、状态变化）
         └── incident-YYYYMMDD-HHMMSS-xxxxxx.json  # 单个异常处置单（含处理记录）
 ```

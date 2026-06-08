@@ -1,0 +1,2 @@
+﻿batch_id,status,created_at,updated_at,csv_path,total_items,success_count,fail_count,notes,preview_count,latest_preview_id,signoff_count,signoff_status,signoff_signed_rooms,signoff_abnormal_count,signoff_last_imported_at,signoff_audit_count,signoff_corrected_count,signoff_revoked_count,incident_count,incident_open_count,incident_processing_count,incident_closed_count
+batch-20260608-195601-90e251,dry_run_passed,2026-06-08T19:56:01.217129,2026-06-08T19:56:01.233234,.review_artifacts\manual_review\rooms.csv,2,0,0,预检通过: 2/2 项,0,,0,none,0,0,,0,0,0,2,2,0,0

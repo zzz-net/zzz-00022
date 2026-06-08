@@ -1148,8 +1148,10 @@ def signoff_history(
 
 
 @main.command(
-    help="创建异常处置单: 发放后登记试卷包损坏、错装、临时换考场等问题。"
+    help="创建异常处置单: 批次完成发放后登记试卷包损坏、错装、临时换考场等问题。"
+         "只有已发放 (completed) 或已回滚 (rolled_back) 的批次才能建单。"
          "同一考场存在未关闭工单时将提示冲突。"
+         "每次创建、处理、关闭操作都会写入独立的审计日志。"
 )
 @click.option("--batch-id", required=True, help="批次 ID")
 @click.option("--exam-id", required=True, help="考试 ID")
@@ -1257,6 +1259,7 @@ def incident_list(
 @main.command(
     help="处理异常处置单: 追加处理记录，可选择更新状态（processing 或保持 open）。"
          "已关闭的处置单无法追加处理记录。"
+         "每次处理操作都会写入独立的审计日志。"
 )
 @click.option("--batch-id", required=True, help="批次 ID")
 @click.option("--ticket-id", required=True, help="处置单 ID")
@@ -1303,6 +1306,7 @@ def incident_handle(
 @main.command(
     help="关闭异常处置单: 将处置单状态标记为 closed，记录关闭人和关闭原因。"
          "已关闭的处置单不可再次关闭或追加处理记录。"
+         "关闭操作会写入独立的审计日志。"
 )
 @click.option("--batch-id", required=True, help="批次 ID")
 @click.option("--ticket-id", required=True, help="处置单 ID")
