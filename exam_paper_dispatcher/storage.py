@@ -235,3 +235,11 @@ class Storage:
         if not p.exists():
             return ""
         return p.read_text(encoding="utf-8")
+
+    def get_events_for_batch(self, batch_id: str) -> str:
+        full_log = self.get_events_log()
+        if not full_log:
+            return ""
+        marker = f"[{batch_id}]"
+        lines = [l for l in full_log.splitlines() if marker in l]
+        return "\n".join(lines) + ("\n" if lines else "")

@@ -26,6 +26,11 @@ from .query_export import (
     list_batches,
     query_batch,
 )
+from .audit_pack import (
+    AuditPackError,
+    build_audit_pack,
+    verify_audit_pack,
+)
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
@@ -338,6 +343,52 @@ def export(ctx: click.Context, fmt: str, batch_id: Optional[str], output_path: s
     except Exception as e:
         err_console.print(f"导出失败: {e}")
         ctx.exit(ExitCode.IO_ERROR)
+
+
+@main.command(help="生成交接审计包: 将批次配置、报告、日志打包为离线 zip")
+@click.option("--batch-id", required=True, help="批次 ID")
+@click.option("--output", "output_path", required=True, help="输出 zip 文件路径")
+@click.option("--force", is_flag=True, help="覆盖已存在的输出文件")
+@click.pass_context
+def audit_pack(ctx: click.Context, batch_id: str, output_path: str, force: bool):
+    storage: Storage = ctx.obj["storage"]
+    out, error = build_audit_pack(storage, batch_id, output_path, force=force)
+    if error:
+        err_console.print(f"[审计包错误] {str(error)}")
+        if error.details:
+            for k, v in error.details.items():
+                console.print(f"  {k}: {v}")
+        ctx.exit(error.exit_code)
+    console.print(f"[green]审计包已生成: {out}[/green]")
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(help="校验交接审计包: 检查 manifest、SHA256、批次号、配置摘要和明细数量")
+@click.option("--archive", "archive_path", required=True, help="审计包 zip 文件路径")
+@click.pass_context
+def audit_verify(ctx: click.Context, archive_path: str):
+    result = verify_audit_pack(archive_path)
+    if result.ok:
+        m = result.manifest or {}
+        t = Table(title=f"审计包校验通过", show_lines=True)
+        t.add_column("项目")
+        t.add_column("值", style="green")
+        t.add_row("归档文件", str(result.archive_path))
+        t.add_row("批次 ID", m.get("batch_id", ""))
+        t.add_row("批次状态", m.get("batch_status", ""))
+        t.add_row("Schema 版本", m.get("schema_version", ""))
+        counts = m.get("counts", {})
+        t.add_row("预检明细数", str(counts.get("precheck_items", 0)))
+        t.add_row("发放明细数", str(counts.get("dispatch_items", 0)))
+        t.add_row("回滚记录数", str(counts.get("rollback_results", 0)))
+        t.add_row("包含文件数", str(len(m.get("files_sha256", {}))))
+        console.print(t)
+        ctx.exit(ExitCode.SUCCESS)
+    else:
+        err_console.print(f"[red]审计包校验失败: {archive_path}[/red]")
+        for e in result.errors:
+            err_console.print(f"  - {e}")
+        ctx.exit(ExitCode.AUDIT_VERIFY_FAILED)
 
 
 def run():

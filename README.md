@@ -215,6 +215,7 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
 | 8 | BATCH_ALREADY_DONE | 批次已发放，需先回滚 |
 | 9 | ROLLBACK_TAMPERED | 回滚时发现文件被替换，已停止 |
 | 10 | IO_ERROR | 文件复制/删除等 I/O 错误 |
+| 11 | BATCH_ID_CONFLICT | 自定义批次 ID 已存在，拒绝复用覆盖 |
 | 99 | UNKNOWN_ERROR | 未预期的异常 |
 
 ---

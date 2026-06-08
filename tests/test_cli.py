@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -376,3 +377,518 @@ def test_rollback_tamper_detection(runner, fresh_env):
 
     batch = Storage(env["storage_dir"]).get_batch(bid)
     assert batch.status == BatchStatus.ROLLED_BACK
+
+
+# ---------------------------------------------------------------------------
+# 5. audit-pack / audit-verify: 成功链路（预检后、发放后、回滚后）
+# ---------------------------------------------------------------------------
+
+def test_audit_pack_and_verify_after_precheck(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+
+    out_zip = env["tmp_path"] / f"audit_{bid}.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert out_zip.exists()
+    assert out_zip.stat().st_size > 0
+
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        names = set(zf.namelist())
+        assert "manifest.json" in names
+        assert "README.txt" in names
+        assert "config_snapshot.json" in names
+        assert "precheck_report.json" in names
+        assert "batch_events.log" in names
+        assert "dispatch_report.json" not in names
+        assert "rollback_report.json" not in names
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["batch_id"] == bid
+        assert manifest["batch_status"] == "dry_run_passed"
+        assert manifest["counts"]["precheck_items"] == 3
+        assert manifest["counts"]["dispatch_items"] == 0
+        assert manifest["config_digest_sha256"]
+        readme = zf.read("README.txt").decode("utf-8")
+        assert bid in readme
+        assert "考务交接审计包" in readme
+
+    r = runner.invoke(
+        main,
+        ["audit-verify", "--archive", str(out_zip)],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert "审计包校验通过" in r.stdout
+    assert bid in r.stdout
+
+
+def test_audit_pack_and_verify_after_dispatch(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+    r = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "dispatch", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    out_zip = env["tmp_path"] / f"audit_{bid}.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        names = set(zf.namelist())
+        assert "dispatch_report.json" in names
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["batch_status"] == "completed"
+        assert manifest["counts"]["dispatch_items"] == 3
+
+    r = runner.invoke(
+        main,
+        ["audit-verify", "--archive", str(out_zip)],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+
+def test_audit_pack_and_verify_after_rollback(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+    r = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "dispatch", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+    r = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "rollback", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    out_zip = env["tmp_path"] / f"audit_{bid}.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        names = set(zf.namelist())
+        assert "rollback_report.json" in names
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["batch_status"] == "rolled_back"
+        assert manifest["counts"]["rollback_results"] == 3
+
+    r = runner.invoke(
+        main,
+        ["audit-verify", "--archive", str(out_zip)],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# 6. audit-pack: 跨重启内容一致
+# ---------------------------------------------------------------------------
+
+def test_audit_pack_consistent_after_restart(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+    r = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "dispatch", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    zip1 = env["tmp_path"] / "audit_v1.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(zip1),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    zip2 = env["tmp_path"] / "audit_v2.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(zip2),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    with zipfile.ZipFile(zip1, "r") as zf1, zipfile.ZipFile(zip2, "r") as zf2:
+        names1 = sorted(zf1.namelist())
+        names2 = sorted(zf2.namelist())
+        assert names1 == names2
+        for n in names1:
+            if n == "manifest.json":
+                m1 = json.loads(zf1.read(n).decode("utf-8"))
+                m2 = json.loads(zf2.read(n).decode("utf-8"))
+                for k in ("batch_id", "batch_status", "config_digest_sha256", "counts"):
+                    assert m1.get(k) == m2.get(k), f"manifest[{k}] 不一致"
+                for fname, sha in m1["files_sha256"].items():
+                    if fname != "manifest.json" and fname != "README.txt":
+                        assert m2["files_sha256"].get(fname) == sha, f"{fname} SHA 不一致"
+            elif n == "README.txt":
+                pass
+            else:
+                assert zf1.read(n) == zf2.read(n), f"{n} 内容不一致"
+
+
+# ---------------------------------------------------------------------------
+# 7. audit-pack: 同名输出冲突
+# ---------------------------------------------------------------------------
+
+def test_audit_pack_output_conflict(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+
+    out_zip = env["tmp_path"] / "audit.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+    first_sha = compute_sha256(out_zip)
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.AUDIT_OUTPUT_CONFLICT, f"got {r.exit_code}, stdout={r.stdout}"
+    assert "已存在" in (r.stdout + (r.stderr or ""))
+    assert compute_sha256(out_zip) == first_sha
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip), "--force",
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# 8. audit-pack: 不可写目录
+# ---------------------------------------------------------------------------
+
+def test_audit_pack_unwritable_dir(runner, fresh_env, monkeypatch):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+
+    unwritable = env["tmp_path"] / "readonly_dir"
+    unwritable.mkdir()
+    import stat
+    readonly = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+    try:
+        os.chmod(unwritable, readonly)
+    except (PermissionError, OSError):
+        pytest.skip("当前系统无法设置目录只读权限（可能为 Windows 管理员）")
+
+    probe = unwritable / ".probe_write"
+    try:
+        probe.write_bytes(b"x")
+        probe.unlink()
+        pytest.skip("当前平台 chmod 对目录不生效，跳过不可写目录测试")
+    except (PermissionError, OSError):
+        pass
+
+    out_zip = unwritable / "audit.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code in (ExitCode.AUDIT_OUTPUT_PERMISSION, ExitCode.IO_ERROR), \
+        f"got {r.exit_code}, stdout={r.stdout}"
+    assert not out_zip.exists()
+
+    os.chmod(unwritable, stat.S_IRWXU)
+
+
+# ---------------------------------------------------------------------------
+# 9. audit-pack: 批次不存在 / pending 状态 / 缺少报告
+# ---------------------------------------------------------------------------
+
+def test_audit_pack_batch_not_found(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", "no-such-batch",
+            "--output", str(env["tmp_path"] / "x.zip"),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.BATCH_NOT_FOUND, f"got {r.exit_code}, stdout={r.stdout}"
+
+
+def test_audit_pack_pending_status_rejected(runner, fresh_env):
+    env = fresh_env
+    storage = Storage(env["storage_dir"])
+    batch = storage.create_batch("pending-batch-001")
+    assert batch.status == BatchStatus.PENDING
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", "pending-batch-001",
+            "--output", str(env["tmp_path"] / "x.zip"),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.AUDIT_INVALID_BATCH_STATUS, \
+        f"got {r.exit_code}, stdout={r.stdout}"
+    assert "pending" in (r.stdout + (r.stderr or ""))
+
+
+# ---------------------------------------------------------------------------
+# 10. audit-verify: 归档被改动（篡改 SHA、删文件、改内容）
+# ---------------------------------------------------------------------------
+
+def test_audit_verify_detects_tampered_file(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+    r = runner.invoke(
+        main,
+        ["--storage-dir", str(env["storage_dir"]), "dispatch", "--batch-id", bid],
+        catch_exceptions=False,
+    )
+
+    out_zip = env["tmp_path"] / "audit.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    tampered = env["tmp_path"] / "audit_tampered.zip"
+    with zipfile.ZipFile(out_zip, "r") as zin, zipfile.ZipFile(tampered, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "precheck_report.json":
+                rep = json.loads(data.decode("utf-8"))
+                rep["total_rows"] = 99999
+                data = json.dumps(rep, ensure_ascii=False, indent=2).encode("utf-8")
+            zout.writestr(item, data)
+
+    r = runner.invoke(
+        main,
+        ["audit-verify", "--archive", str(tampered)],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.AUDIT_VERIFY_FAILED, f"got {r.exit_code}, stdout={r.stdout}"
+    assert "校验失败" in (r.stdout + (r.stderr or ""))
+    assert "SHA256" in (r.stdout + (r.stderr or ""))
+
+
+def test_audit_verify_detects_missing_file(runner, fresh_env):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+
+    out_zip = env["tmp_path"] / "audit.zip"
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(out_zip),
+        ],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.SUCCESS
+
+    missing = env["tmp_path"] / "audit_missing.zip"
+    with zipfile.ZipFile(out_zip, "r") as zin, zipfile.ZipFile(missing, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            if item.filename == "config_snapshot.json":
+                continue
+            zout.writestr(item, zin.read(item.filename))
+
+    r = runner.invoke(
+        main,
+        ["audit-verify", "--archive", str(missing)],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.AUDIT_VERIFY_FAILED, f"got {r.exit_code}, stdout={r.stdout}"
+    assert "缺失" in (r.stdout + (r.stderr or ""))
+
+
+def test_audit_verify_non_zip(runner, fresh_env):
+    env = fresh_env
+    bad = env["tmp_path"] / "not_a_zip.zip"
+    bad.write_bytes(b"this is not a zip file at all")
+    r = runner.invoke(
+        main,
+        ["audit-verify", "--archive", str(bad)],
+        catch_exceptions=False,
+    )
+    assert r.exit_code == ExitCode.AUDIT_VERIFY_FAILED
+    assert not ("[未处理异常]" in (r.stdout + (r.stderr or "")))
+
+
+def test_audit_pack_no_half_file_on_error(runner, fresh_env, monkeypatch):
+    env = fresh_env
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "precheck", "--config", str(env["config_path"]),
+            "--rooms", str(env["rooms_path"]),
+        ],
+        catch_exceptions=False,
+    )
+    bid = Storage(env["storage_dir"]).list_batches()[0].batch_id
+
+    target = env["tmp_path"] / "audit_fail.zip"
+
+    from exam_paper_dispatcher import audit_pack as ap
+
+    real_zipfile_zipfile = zipfile.ZipFile
+
+    def bad_writestr(self, *args, **kwargs):
+        raise OSError("simulated writestr failure")
+
+    monkeypatch.setattr(ap.zipfile.ZipFile, "writestr", bad_writestr)
+
+    r = runner.invoke(
+        main,
+        [
+            "--storage-dir", str(env["storage_dir"]),
+            "audit-pack", "--batch-id", bid,
+            "--output", str(target),
+        ],
+    )
+    assert r.exit_code != ExitCode.SUCCESS, f"got {r.exit_code}, stdout={r.stdout}"
+    assert not target.exists()
+    for leftover in env["tmp_path"].glob("audit_*.tmp"):
+        leftover.unlink()
+        assert False, f"存在临时半截文件: {leftover}"
