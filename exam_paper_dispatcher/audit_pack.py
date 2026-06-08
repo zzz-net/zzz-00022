@@ -12,6 +12,8 @@ from typing import Optional
 from .models import (
     BatchStatus,
     ExitCode,
+    SIGNOFF_AUDIT_LOG_FILE,
+    SIGNOFF_ROOM_VERSIONS_FILE,
     compute_sha256,
 )
 from .signoff import build_signoff_summary
@@ -42,6 +44,8 @@ AUDIT_CONTENTS = [
 
 SIGNOFF_SUMMARY_FILE = "signoff_summary.json"
 SIGNOFF_INDEX_EXPORT = "signoffs_index.json"
+SIGNOFF_AUDIT_EXPORT = "signoff_audit_log.jsonl"
+SIGNOFF_VERSIONS_EXPORT = "signoff_room_versions.json"
 
 
 class AuditPackError(Exception):
@@ -112,6 +116,19 @@ def _collect_batch_payload(batch: BatchState, storage: Storage) -> dict[str, byt
                     rpt.model_dump(mode="json"), ensure_ascii=False, indent=2
                 ).encode("utf-8")
 
+        audit_log = batch.load_signoff_audit_log()
+        if audit_log:
+            lines = []
+            for entry in audit_log:
+                lines.append(json.dumps(entry.model_dump(mode="json"), ensure_ascii=False))
+            payload[SIGNOFF_AUDIT_EXPORT] = ("\n".join(lines) + "\n").encode("utf-8")
+
+        room_versions = batch.load_room_versions()
+        if room_versions:
+            payload[SIGNOFF_VERSIONS_EXPORT] = json.dumps(
+                room_versions, ensure_ascii=False, indent=2
+            ).encode("utf-8")
+
     return payload
 
 
@@ -139,6 +156,9 @@ def _build_readme(batch: BatchState, payload: dict[str, bytes]) -> str:
         lines.append(f"签收导入次数   : {signoff.get('count', 0)}")
         lines.append(f"已签收考场     : {signoff.get('signed_rooms', 0)}/{signoff.get('total_expected', 0)}")
         lines.append(f"签收异常数     : {signoff.get('abnormal_count', 0)}")
+        lines.append(f"签收更正次数   : {signoff.get('corrected_count', 0)}")
+        lines.append(f"签收撤销次数   : {signoff.get('revoked_count', 0)}")
+        lines.append(f"审计日志总数   : {signoff.get('audit_count', 0)}")
         if signoff.get("last_imported_at"):
             lines.append(f"最后签收导入   : {signoff.get('last_imported_at')}")
         lines.append("")
@@ -197,11 +217,17 @@ def _build_manifest(batch: BatchState, payload: dict[str, bytes]) -> dict:
     signoff_count = 0
     signoff_signed_rooms = 0
     signoff_abnormal = 0
+    signoff_corrected = 0
+    signoff_revoked = 0
+    signoff_audit_total = 0
     if SIGNOFF_SUMMARY_FILE in payload:
         summary = json.loads(payload[SIGNOFF_SUMMARY_FILE].decode("utf-8"))
         signoff_count = summary.get("count", 0)
         signoff_signed_rooms = summary.get("signed_rooms", 0)
         signoff_abnormal = summary.get("abnormal_count", 0)
+        signoff_corrected = summary.get("corrected_count", 0)
+        signoff_revoked = summary.get("revoked_count", 0)
+        signoff_audit_total = summary.get("audit_count", 0)
 
     return {
         "schema_version": "1.0",
@@ -216,6 +242,9 @@ def _build_manifest(batch: BatchState, payload: dict[str, bytes]) -> dict:
             "signoff_imports": signoff_count,
             "signoff_signed_rooms": signoff_signed_rooms,
             "signoff_abnormal": signoff_abnormal,
+            "signoff_corrected": signoff_corrected,
+            "signoff_revoked": signoff_revoked,
+            "signoff_audit_total": signoff_audit_total,
         },
         "files_sha256": files_sha,
     }

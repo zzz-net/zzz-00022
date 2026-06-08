@@ -14,6 +14,11 @@ from .models import (
     PreviewReport,
     RoomRow,
     SignoffReport,
+    SignoffAuditEntry,
+    SignoffAuditAction,
+    SIGNOFF_AUDIT_LOG_FILE,
+    SIGNOFF_ROOM_VERSIONS_FILE,
+    gen_signoff_audit_id,
 )
 
 
@@ -289,6 +294,149 @@ class BatchState:
         if not idx_path.exists():
             return {}
         return json.loads(idx_path.read_text(encoding="utf-8"))
+
+    def _get_signoff_audit_log_path(self) -> Path:
+        return self.batch_dir / SIGNOFFS_DIR / SIGNOFF_AUDIT_LOG_FILE
+
+    def _get_room_versions_path(self) -> Path:
+        return self.batch_dir / SIGNOFFS_DIR / SIGNOFF_ROOM_VERSIONS_FILE
+
+    def append_signoff_audit(self, entry: SignoffAuditEntry) -> None:
+        signoffs_dir = self.batch_dir / SIGNOFFS_DIR
+        signoffs_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = self._get_signoff_audit_log_path()
+        line = json.dumps(entry.model_dump(mode="json"), ensure_ascii=False) + "\n"
+        with audit_path.open("a", encoding="utf-8") as f:
+            f.write(line)
+        self._log_event(
+            f"签收审计日志: action={entry.action.value}, "
+            f"room={entry.room_id}/{entry.subject}, "
+            f"operator={entry.operator}, "
+            f"version {entry.version_before}->{entry.version_after}"
+        )
+
+    def load_signoff_audit_log(self) -> list[SignoffAuditEntry]:
+        audit_path = self._get_signoff_audit_log_path()
+        if not audit_path.exists():
+            return []
+        entries: list[SignoffAuditEntry] = []
+        with audit_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    entries.append(SignoffAuditEntry.model_validate_json(line))
+        return entries
+
+    def load_room_versions(self) -> dict:
+        vpath = self._get_room_versions_path()
+        if not vpath.exists():
+            return {}
+        return json.loads(vpath.read_text(encoding="utf-8"))
+
+    def save_room_versions(self, versions: dict) -> None:
+        signoffs_dir = self.batch_dir / SIGNOFFS_DIR
+        signoffs_dir.mkdir(parents=True, exist_ok=True)
+        vpath = self._get_room_versions_path()
+        vpath.write_text(
+            json.dumps(versions, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def get_room_version(self, exam_id: str, room_id: str, subject: str) -> int:
+        versions = self.load_room_versions()
+        key = f"{exam_id}:{room_id}:{subject}"
+        return versions.get(key, 0)
+
+    def increment_room_version(self, exam_id: str, room_id: str, subject: str) -> int:
+        versions = self.load_room_versions()
+        key = f"{exam_id}:{room_id}:{subject}"
+        versions[key] = versions.get(key, 0) + 1
+        self.save_room_versions(versions)
+        return versions[key]
+
+    def get_effective_signoff_items(self) -> dict[tuple[str, str, str], dict]:
+        """获取当前有效的签收项（考虑更正和撤销）。"""
+        latest = self.load_latest_signoff_report()
+        if not latest:
+            return {}
+        result: dict[tuple[str, str, str], dict] = {}
+        for it in latest.signoff_items:
+            key = (it["exam_id"], it["room_id"], it["subject"])
+            result[key] = dict(it)
+        audit_entries = self.load_signoff_audit_log()
+        for entry in audit_entries:
+            key = (entry.exam_id, entry.room_id, entry.subject)
+            if entry.action == SignoffAuditAction.CORRECT:
+                if key in result:
+                    current = result[key]
+                    for field, new_val in entry.new_values.items():
+                        current[field] = new_val
+                    current["version"] = entry.version_after
+                    current["last_updated"] = entry.timestamp
+                    current["last_operator"] = entry.operator
+                    precheck = self.load_precheck_report()
+                    expected = None
+                    if precheck:
+                        for item in precheck.items:
+                            rr = item.room_row
+                            if (rr.exam_id, rr.room_id, rr.subject) == key:
+                                expected = rr.students_count
+                                break
+                    current["is_abnormal"] = bool(current.get("damage_note")) or (
+                        expected is not None and current.get("received_count") != expected
+                    )
+            elif entry.action == SignoffAuditAction.REVOKE:
+                if key in result:
+                    result[key]["revoked"] = True
+                    result[key]["revoked_at"] = entry.timestamp
+                    result[key]["revoked_by"] = entry.operator
+                    result[key]["revoke_reason"] = entry.reason
+            elif entry.action == SignoffAuditAction.IMPORT:
+                if key in result:
+                    for field in ("revoked", "revoked_at", "revoked_by", "revoke_reason"):
+                        result[key].pop(field, None)
+                    result[key]["version"] = entry.version_after
+                    result[key]["last_updated"] = entry.timestamp
+                    result[key]["last_operator"] = entry.operator
+        return result
+
+    def get_signoff_room_history(
+        self, exam_id: str, room_id: str, subject: str
+    ) -> dict:
+        """获取某个考场的签收历史（含所有版本和审计记录）。"""
+        key = (exam_id, room_id, subject)
+        history: dict = {
+            "exam_id": exam_id,
+            "room_id": room_id,
+            "subject": subject,
+            "current_version": self.get_room_version(exam_id, room_id, subject),
+            "imported": False,
+            "revoked": False,
+            "import_records": [],
+            "audit_records": [],
+            "current": None,
+        }
+        all_reports = self.load_all_signoff_reports()
+        for rpt in all_reports:
+            for it in rpt.signoff_items:
+                if (it["exam_id"], it["room_id"], it["subject"]) == key:
+                    history["import_records"].append({
+                        "signoff_id": rpt.signoff_id,
+                        "imported_at": rpt.imported_at,
+                        "values": dict(it),
+                    })
+                    history["imported"] = True
+        effective = self.get_effective_signoff_items()
+        if key in effective:
+            history["current"] = effective[key]
+            if effective[key].get("revoked"):
+                history["revoked"] = True
+        all_audit = self.load_signoff_audit_log()
+        for entry in all_audit:
+            if (entry.exam_id, entry.room_id, entry.subject) == key:
+                history["audit_records"].append(entry.model_dump())
+        history["audit_records"].sort(key=lambda x: x["timestamp"])
+        return history
 
     def _log_event(self, message: str):
         ts = datetime.now().isoformat()

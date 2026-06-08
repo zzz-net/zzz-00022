@@ -80,15 +80,18 @@ exam_id,room_id,subject,students_count,source_file,target_name
 ## 命令速览
 
 ```
-exam-dispatch preview       --config ... --rooms ...                    # 第0步：导入预演（可选，不写出试卷包）
-exam-dispatch precheck      --config ... --rooms ...                    # 第1步：预检
-exam-dispatch dispatch      --batch-id ...                              # 第2步：发放
-exam-dispatch signoff       --batch-id ... --signoffs ... [--force]     # 第3步：发放签收核销
-exam-dispatch query         [--batch-id ...]                            # 第4步：查询
-exam-dispatch rollback      --batch-id ... [--force]                    # 第5步：回滚
-exam-dispatch audit-pack    --batch-id ... --output ...                 # 打包：生成交接审计包
-exam-dispatch audit-verify  --archive ...                               # 验包：校验审计包完整性
-exam-dispatch export        --format ... --output ...                   # 导出数据
+exam-dispatch preview           --config ... --rooms ...                    # 第0步：导入预演（可选，不写出试卷包）
+exam-dispatch precheck          --config ... --rooms ...                    # 第1步：预检
+exam-dispatch dispatch          --batch-id ...                              # 第2步：发放
+exam-dispatch signoff           --batch-id ... --signoffs ... [--force]     # 第3步：发放签收核销
+exam-dispatch signoff-correct   --batch-id ... --exam-id ... --room-id ...  # 更正签收记录
+exam-dispatch signoff-revoke    --batch-id ... --exam-id ... --room-id ...  # 撤销签收记录
+exam-dispatch signoff-history   --batch-id ... [--room-id ...]              # 查看签收历史
+exam-dispatch query             [--batch-id ...]                            # 第4步：查询
+exam-dispatch rollback          --batch-id ... [--force]                    # 第5步：回滚
+exam-dispatch audit-pack        --batch-id ... --output ...                 # 打包：生成交接审计包
+exam-dispatch audit-verify      --archive ...                               # 验包：校验审计包完整性
+exam-dispatch export            --format ... --output ...                   # 导出数据
 ```
 
 ---
@@ -399,6 +402,13 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
 | 22 | AUDIT_MISSING_REPORT | audit-pack 缺少配置快照或预检报告 |
 | 23 | AUDIT_INVALID_BATCH_STATUS | audit-pack 目标批次仍为 pending，尚无报告可打包 |
 | 24 | AUDIT_VERIFY_FAILED | audit-verify 发现归档篡改、缺失或内容不一致 |
+| 25 | SIGNOFF_CORRECT_INVALID_FIELD | 签收更正失败：非法字段或更正内容为空 |
+| 26 | SIGNOFF_CORRECT_ROOM_NOT_FOUND | 签收更正失败：考场不属于该批次 |
+| 27 | SIGNOFF_CORRECT_NOT_SIGNED | 签收更正失败：考场尚未签收或已被撤销 |
+| 28 | SIGNOFF_REVOKE_ROOM_NOT_FOUND | 签收撤销失败：考场不属于该批次 |
+| 29 | SIGNOFF_REVOKE_NOT_SIGNED | 签收撤销失败：考场尚未签收或已被撤销 |
+| 30 | SIGNOFF_AUDIT_OUTPUT_ERROR | 签收审计日志写入失败 |
+| 31 | SIGNOFF_AUDIT_MISSING_REASON | 签收更正/撤销必须提供操作原因 |
 | 99 | UNKNOWN_ERROR | 未预期的异常 |
 
 ---
@@ -436,6 +446,8 @@ python -m exam_paper_dispatcher.cli export --format csv-items \
     │   ├── previews_index.json  # 预演索引
     │   └── preview-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次预演完整报告
     └── signoffs/                # 签收核销报告目录（同一批次可多次导入，不静默覆盖）
-        ├── signoffs_index.json  # 签收索引
-        └── signoff-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次签收完整报告
+        ├── signoffs_index.json          # 签收索引
+        ├── signoff-YYYYMMDD-HHMMSS-xxxxxx.json  # 单次签收完整报告
+        ├── signoff_audit_log.jsonl      # 签收更正/撤销审计日志（JSON Lines，每条含操作人、原因、原值、新值、版本号）
+        └── signoff_room_versions.json   # 每个考场的签收版本号（每次更正/撤销递增）
 ```

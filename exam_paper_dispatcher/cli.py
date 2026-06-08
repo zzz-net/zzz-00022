@@ -33,7 +33,14 @@ from .audit_pack import (
     verify_audit_pack,
 )
 from .preview import run_import_preview
-from .signoff import SignoffError, import_signoff
+from .signoff import (
+    SignoffError,
+    import_signoff,
+    correct_signoff,
+    revoke_signoff,
+    get_signoff_history,
+    CORRECTABLE_FIELDS,
+)
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
@@ -359,6 +366,142 @@ def _print_signoff_report(report, error: Optional[SignoffError]):
         err_console.print(f"退出码: {error.exit_code}")
 
 
+def _print_correct_result(result: dict, error: Optional[SignoffError]):
+    if error:
+        err_console.print(f"[red]签收更正失败: {error.message}[/red]")
+        if error.details:
+            for k, v in error.details.items():
+                console.print(f"  {k}: {v}")
+        err_console.print(f"退出码: {error.exit_code}")
+        return
+
+    if not result.get("changed", False):
+        console.print(f"[yellow]无需更正: {result.get('message', '')}[/yellow]")
+        return
+
+    p = Panel.fit(
+        f"批次: [bold]{result.get('current', {}).get('exam_id', '')}[/bold]\n"
+        f"考场: [bold]{result.get('current', {}).get('room_id', '')}/{result.get('current', {}).get('subject', '')}[/bold]\n"
+        f"审计ID: [bold]{result.get('audit_id', '')}[/bold]\n"
+        f"版本: {result.get('version_before', 0)} → {result.get('version_after', 0)}",
+        title="[green]签收更正成功[/green]",
+        border_style="green",
+    )
+    console.print(p)
+
+    t = Table(title="字段变更明细", show_lines=True)
+    t.add_column("字段", style="bold")
+    t.add_column("原值", style="red")
+    t.add_column("新值", style="green")
+    for field in result.get("old_values", {}):
+        old_v = str(result["old_values"].get(field, ""))
+        new_v = str(result["new_values"].get(field, ""))
+        t.add_row(field, old_v, new_v)
+    console.print(t)
+
+    curr = result.get("current", {})
+    if curr:
+        t2 = Table(title="当前签收状态", show_lines=True)
+        t2.add_column("字段")
+        t2.add_column("值")
+        for k, v in curr.items():
+            if k not in ("line_no", "expected_count", "is_abnormal"):
+                t2.add_row(str(k), str(v))
+        console.print(t2)
+
+
+def _print_revoke_result(result: dict, error: Optional[SignoffError]):
+    if error:
+        err_console.print(f"[red]签收撤销失败: {error.message}[/red]")
+        if error.details:
+            for k, v in error.details.items():
+                console.print(f"  {k}: {v}")
+        err_console.print(f"退出码: {error.exit_code}")
+        return
+
+    p = Panel.fit(
+        f"批次: [bold]{result.get('exam_id', '')}[/bold]\n"
+        f"考场: [bold]{result.get('room_id', '')}/{result.get('subject', '')}[/bold]\n"
+        f"审计ID: [bold]{result.get('audit_id', '')}[/bold]\n"
+        f"撤销时间: {result.get('revoked_at', '')}\n"
+        f"操作人: {result.get('revoked_by', '')}\n"
+        f"撤销原因: {result.get('revoke_reason', '')}\n"
+        f"版本: {result.get('version_before', 0)} → {result.get('version_after', 0)}",
+        title="[green]签收撤销成功[/green]",
+        border_style="green",
+    )
+    console.print(p)
+    console.print("[yellow]提示: 批次发放状态保持不变，仅该考场的签收标记为已撤销。[/yellow]")
+
+
+def _print_signoff_history(history_list: list[dict]):
+    if not history_list:
+        console.print("[dim]无签收历史记录[/dim]")
+        return
+
+    for h in history_list:
+        status_style = "yellow" if h.get("revoked") else "green"
+        status_text = "已撤销" if h.get("revoked") else "有效"
+        imported_text = "已导入" if h.get("imported") else "未导入"
+        p = Panel.fit(
+            f"考场: [bold]{h.get('room_id', '')}/{h.get('subject', '')}[/bold] "
+            f"([{status_style}]{status_text}[/{status_style}])\n"
+            f"考试ID: {h.get('exam_id', '')}\n"
+            f"导入状态: {imported_text}\n"
+            f"当前版本: {h.get('current_version', 0)}",
+            title="签收历史",
+            border_style="cyan",
+        )
+        console.print(p)
+
+        if h.get("import_records"):
+            t_import = Table(title=f"导入记录 ({len(h['import_records'])} 条)", show_lines=True)
+            t_import.add_column("签收ID")
+            t_import.add_column("导入时间")
+            t_import.add_column("签收人")
+            t_import.add_column("签收时间")
+            t_import.add_column("实收份数")
+            for imp in h["import_records"]:
+                vals = imp.get("values", {})
+                t_import.add_row(
+                    imp.get("signoff_id", ""),
+                    imp.get("imported_at", "")[:19],
+                    vals.get("signoff_person", ""),
+                    vals.get("signoff_time", ""),
+                    str(vals.get("received_count", "")),
+                )
+            console.print(t_import)
+
+        if h.get("audit_records"):
+            t_audit = Table(title=f"审计记录 ({len(h['audit_records'])} 条)", show_lines=True)
+            t_audit.add_column("审计ID")
+            t_audit.add_column("时间")
+            t_audit.add_column("动作")
+            t_audit.add_column("操作人")
+            t_audit.add_column("版本")
+            t_audit.add_column("原因")
+            for aud in h["audit_records"]:
+                t_audit.add_row(
+                    aud.get("audit_id", ""),
+                    aud.get("timestamp", "")[:19],
+                    aud.get("action", ""),
+                    aud.get("operator", ""),
+                    f"{aud.get('version_before', 0)}→{aud.get('version_after', 0)}",
+                    aud.get("reason", ""),
+                )
+            console.print(t_audit)
+
+        if h.get("current"):
+            curr = h["current"]
+            t_curr = Table(title="当前有效状态", show_lines=True)
+            t_curr.add_column("字段")
+            t_curr.add_column("值")
+            for k, v in curr.items():
+                if k not in ("line_no", "expected_count"):
+                    t_curr.add_row(str(k), str(v))
+            console.print(t_curr)
+
+
 @click.group(help="离线考试试卷包校验与发放 CLI")
 @click.option("--storage-dir", default=".exam_dispatch_state", show_default=True,
               help="持久化存储目录")
@@ -520,6 +663,7 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
         t.add_column("成/败", overflow="fold")
         t.add_column("签收", overflow="fold")
         t.add_column("异常", overflow="fold")
+        t.add_column("更/撤", overflow="fold")
         t.add_column("最后签收", overflow="fold")
         t.add_column("备注", overflow="fold")
         for r in rows:
@@ -540,6 +684,7 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
                 "partial": "yellow",
                 "none": "dim",
             }.get(signoff_status, "white")
+            audit_info = f"{r.get('signoff_corrected_count', 0)}/{r.get('signoff_revoked_count', 0)}"
             t.add_row(
                 r["batch_id"],
                 f"[{st_style}]{r['status']}[/{st_style}]",
@@ -549,6 +694,7 @@ def query(ctx: click.Context, batch_id: Optional[str], status: Optional[str]):
                 f"{r['success_count']}/{r['fail_count']}",
                 f"[{signoff_style}]{signoff_status}[/{signoff_style}]",
                 str(r.get("signoff_abnormal_count", 0)),
+                audit_info,
                 str(r.get("signoff_last_imported_at", ""))[:19],
                 r.get("notes", "")[:30],
             )
@@ -652,6 +798,150 @@ def signoff(ctx: click.Context, batch_id: str, csv_path: str, force: bool):
 
     if error:
         ctx.exit(error.exit_code)
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(
+    help="更正签收记录: 按批次和考场定位到具体签收记录，更正签收人、时间、"
+         "实收份数、缺损说明或备注。每次更正写入审计日志，保留操作者、原因、"
+         "时间、原值和新值，版本号自动递增。允许字段: "
+         + ", ".join(sorted(CORRECTABLE_FIELDS))
+)
+@click.option("--batch-id", required=True, help="批次 ID（必须已完成发放）")
+@click.option("--exam-id", required=True, help="考试 ID")
+@click.option("--room-id", required=True, help="考场 ID")
+@click.option("--subject", required=True, help="科目")
+@click.option("--operator", required=True, help="操作人姓名/工号（写入审计日志）")
+@click.option("--reason", required=True, help="更正原因（写入审计日志）")
+@click.option("--signoff-person", default=None, help="更正: 签收人")
+@click.option("--signoff-time", default=None, help="更正: 签收时间")
+@click.option("--received-count", type=int, default=None, help="更正: 实收份数")
+@click.option("--damage-note", default=None, help="更正: 缺损说明")
+@click.option("--remark", default=None, help="更正: 备注")
+@click.pass_context
+def signoff_correct(
+    ctx: click.Context,
+    batch_id: str,
+    exam_id: str,
+    room_id: str,
+    subject: str,
+    operator: str,
+    reason: str,
+    signoff_person: Optional[str],
+    signoff_time: Optional[str],
+    received_count: Optional[int],
+    damage_note: Optional[str],
+    remark: Optional[str],
+):
+    storage: Storage = ctx.obj["storage"]
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        err_console.print(f"批次不存在: {batch_id}")
+        ctx.exit(ExitCode.BATCH_NOT_FOUND)
+
+    updates: dict = {}
+    if signoff_person is not None:
+        updates["signoff_person"] = signoff_person
+    if signoff_time is not None:
+        updates["signoff_time"] = signoff_time
+    if received_count is not None:
+        updates["received_count"] = received_count
+    if damage_note is not None:
+        updates["damage_note"] = damage_note
+    if remark is not None:
+        updates["remark"] = remark
+
+    result, error = correct_signoff(
+        batch=batch,
+        exam_id=exam_id,
+        room_id=room_id,
+        subject=subject,
+        updates=updates,
+        operator=operator,
+        reason=reason,
+    )
+    _print_correct_result(result, error)
+    if error:
+        ctx.exit(error.exit_code)
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(
+    help="撤销签收记录: 按批次和考场撤销单个考场的签收记录（不改变批次发放状态）。"
+         "撤销写入审计日志，保留操作者、原因、时间；撤销后该考场视为未签收，"
+         "可通过重新导入签收 CSV 或 signoff-correct 重新登记。"
+)
+@click.option("--batch-id", required=True, help="批次 ID（必须已完成发放）")
+@click.option("--exam-id", required=True, help="考试 ID")
+@click.option("--room-id", required=True, help="考场 ID")
+@click.option("--subject", required=True, help="科目")
+@click.option("--operator", required=True, help="操作人姓名/工号（写入审计日志）")
+@click.option("--reason", required=True, help="撤销原因（写入审计日志）")
+@click.pass_context
+def signoff_revoke(
+    ctx: click.Context,
+    batch_id: str,
+    exam_id: str,
+    room_id: str,
+    subject: str,
+    operator: str,
+    reason: str,
+):
+    storage: Storage = ctx.obj["storage"]
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        err_console.print(f"批次不存在: {batch_id}")
+        ctx.exit(ExitCode.BATCH_NOT_FOUND)
+
+    result, error = revoke_signoff(
+        batch=batch,
+        exam_id=exam_id,
+        room_id=room_id,
+        subject=subject,
+        operator=operator,
+        reason=reason,
+    )
+    _print_revoke_result(result, error)
+    if error:
+        ctx.exit(error.exit_code)
+    ctx.exit(ExitCode.SUCCESS)
+
+
+@main.command(
+    help="签收历史查询: 按批次（和可选的考场/科目）查看签收导入记录、"
+         "更正/撤销审计日志、当前有效签收状态和版本号。重启 CLI 后结果一致。"
+)
+@click.option("--batch-id", required=True, help="批次 ID")
+@click.option("--exam-id", default=None, help="按考试 ID 过滤（可选）")
+@click.option("--room-id", default=None, help="按考场 ID 过滤（可选）")
+@click.option("--subject", default=None, help="按科目过滤（可选）")
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]),
+              default="table", show_default=True, help="输出格式")
+@click.pass_context
+def signoff_history(
+    ctx: click.Context,
+    batch_id: str,
+    exam_id: Optional[str],
+    room_id: Optional[str],
+    subject: Optional[str],
+    fmt: str,
+):
+    storage: Storage = ctx.obj["storage"]
+    batch = storage.get_batch(batch_id)
+    if not batch:
+        err_console.print(f"批次不存在: {batch_id}")
+        ctx.exit(ExitCode.BATCH_NOT_FOUND)
+
+    history = get_signoff_history(
+        batch=batch,
+        exam_id=exam_id,
+        room_id=room_id,
+        subject=subject,
+    )
+    if fmt == "json":
+        console.print_json(data=history)
+    else:
+        _print_signoff_history(history)
     ctx.exit(ExitCode.SUCCESS)
 
 

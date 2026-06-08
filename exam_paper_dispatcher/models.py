@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import hashlib
+import uuid
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -34,6 +35,13 @@ class ExitCode:
     AUDIT_MISSING_REPORT = 22
     AUDIT_INVALID_BATCH_STATUS = 23
     AUDIT_VERIFY_FAILED = 24
+    SIGNOFF_CORRECT_INVALID_FIELD = 25
+    SIGNOFF_CORRECT_ROOM_NOT_FOUND = 26
+    SIGNOFF_CORRECT_NOT_SIGNED = 27
+    SIGNOFF_REVOKE_ROOM_NOT_FOUND = 28
+    SIGNOFF_REVOKE_NOT_SIGNED = 29
+    SIGNOFF_AUDIT_OUTPUT_ERROR = 30
+    SIGNOFF_AUDIT_MISSING_REASON = 31
     UNKNOWN_ERROR = 99
 
 
@@ -216,3 +224,35 @@ class SignoffReport(BaseModel):
     abnormal_count: int = 0
     passed: bool = False
     imported_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+SIGNOFF_AUDIT_LOG_FILE = "signoff_audit_log.jsonl"
+SIGNOFF_ROOM_VERSIONS_FILE = "signoff_room_versions.json"
+
+
+class SignoffAuditAction(str, Enum):
+    CORRECT = "correct"
+    REVOKE = "revoke"
+    IMPORT = "import"
+
+
+class SignoffAuditEntry(BaseModel):
+    audit_id: str
+    batch_id: str
+    exam_id: str
+    room_id: str
+    subject: str
+    action: SignoffAuditAction
+    operator: str
+    reason: str
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    version_before: int = 0
+    version_after: int = 0
+    old_values: dict = Field(default_factory=dict)
+    new_values: dict = Field(default_factory=dict)
+
+
+def gen_signoff_audit_id() -> str:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"signoff-audit-{ts}-{uuid.uuid4().hex[:6]}"
+

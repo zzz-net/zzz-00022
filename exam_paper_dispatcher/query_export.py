@@ -87,6 +87,16 @@ def query_batch(storage: Storage, batch_id: str) -> Optional[dict]:
     signoff_summary = build_signoff_summary(batch)
     result["signoff"] = signoff_summary
 
+    audit_log = batch.load_signoff_audit_log()
+    if audit_log:
+        result["signoff_audit_log"] = [a.model_dump() for a in audit_log]
+
+    effective_signoffs = batch.get_effective_signoff_items()
+    if effective_signoffs:
+        result["signoff_effective"] = {
+            f"{k[0]}:{k[1]}:{k[2]}": v for k, v in effective_signoffs.items()
+        }
+
     return result
 
 
@@ -107,6 +117,9 @@ def list_batches(storage: Storage, status_filter: Optional[str] = None) -> list[
         d["signoff_signed_rooms"] = signoff_summary.get("signed_rooms", 0)
         d["signoff_abnormal_count"] = signoff_summary.get("abnormal_count", 0)
         d["signoff_last_imported_at"] = signoff_summary.get("last_imported_at", "")
+        d["signoff_audit_count"] = signoff_summary.get("audit_count", 0)
+        d["signoff_corrected_count"] = signoff_summary.get("corrected_count", 0)
+        d["signoff_revoked_count"] = signoff_summary.get("revoked_count", 0)
         result.append(d)
     return result
 
@@ -147,6 +160,7 @@ def export_batches_csv(
         "preview_count", "latest_preview_id",
         "signoff_count", "signoff_status", "signoff_signed_rooms",
         "signoff_abnormal_count", "signoff_last_imported_at",
+        "signoff_audit_count", "signoff_corrected_count", "signoff_revoked_count",
     ]
     with out.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -162,6 +176,9 @@ def export_batches_csv(
             row["signoff_signed_rooms"] = signoff_summary.get("signed_rooms", 0)
             row["signoff_abnormal_count"] = signoff_summary.get("abnormal_count", 0)
             row["signoff_last_imported_at"] = signoff_summary.get("last_imported_at", "")
+            row["signoff_audit_count"] = signoff_summary.get("audit_count", 0)
+            row["signoff_corrected_count"] = signoff_summary.get("corrected_count", 0)
+            row["signoff_revoked_count"] = signoff_summary.get("revoked_count", 0)
             writer.writerow(row)
     return out
 
@@ -181,20 +198,17 @@ def export_items_csv(
     dispatch = batch.load_dispatch_report() or {}
     items = dispatch.get("items", [])
 
-    latest_signoff = batch.load_latest_signoff_report()
-    signoff_map: dict[tuple[str, str, str], dict] = {}
-    if latest_signoff:
-        for si in latest_signoff.signoff_items:
-            key = (si["exam_id"], si["room_id"], si["subject"])
-            signoff_map[key] = si
+    signoff_map = batch.get_effective_signoff_items()
 
     fieldnames = [
         "target_name", "exam_id", "room_id", "subject",
         "students_count", "source_path", "target_path",
         "dispatched", "source_sha256", "target_sha256", "error",
-        "signed_off", "signoff_person", "signoff_time",
+        "signed_off", "signoff_revoked", "signoff_person", "signoff_time",
         "received_count", "damage_note", "signoff_remark",
-        "signoff_abnormal",
+        "signoff_abnormal", "signoff_version",
+        "signoff_last_updated", "signoff_last_operator",
+        "signoff_revoked_at", "signoff_revoked_by", "signoff_revoke_reason",
     ]
     with out.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -203,6 +217,7 @@ def export_items_csv(
             rr = it.get("room_row", {})
             key = (rr.get("exam_id", ""), rr.get("room_id", ""), rr.get("subject", ""))
             si = signoff_map.get(key, {})
+            is_signed = bool(si) and not si.get("revoked", False)
             writer.writerow({
                 "target_name": rr.get("target_name", ""),
                 "exam_id": rr.get("exam_id", ""),
@@ -215,12 +230,19 @@ def export_items_csv(
                 "source_sha256": it.get("source_sha256", ""),
                 "target_sha256": it.get("target_sha256", ""),
                 "error": it.get("error", ""),
-                "signed_off": "True" if si else "False",
+                "signed_off": "True" if is_signed else "False",
+                "signoff_revoked": "True" if si.get("revoked") else "False",
                 "signoff_person": si.get("signoff_person", ""),
                 "signoff_time": si.get("signoff_time", ""),
                 "received_count": si.get("received_count", ""),
                 "damage_note": si.get("damage_note", ""),
                 "signoff_remark": si.get("remark", ""),
                 "signoff_abnormal": si.get("is_abnormal", ""),
+                "signoff_version": si.get("version", ""),
+                "signoff_last_updated": si.get("last_updated", ""),
+                "signoff_last_operator": si.get("last_operator", ""),
+                "signoff_revoked_at": si.get("revoked_at", ""),
+                "signoff_revoked_by": si.get("revoked_by", ""),
+                "signoff_revoke_reason": si.get("revoke_reason", ""),
             })
     return out

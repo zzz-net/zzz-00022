@@ -9,8 +9,20 @@ from .models import (
     PreCheckReport,
     SignoffReport,
     SignoffRow,
+    SignoffAuditEntry,
+    SignoffAuditAction,
+    gen_signoff_audit_id,
 )
 from .storage import BatchState, Storage, gen_signoff_id
+
+
+CORRECTABLE_FIELDS = {
+    "signoff_person",
+    "signoff_time",
+    "received_count",
+    "damage_note",
+    "remark",
+}
 
 
 class SignoffError(Exception):
@@ -35,15 +47,11 @@ def _get_batch_rooms(batch: BatchState) -> dict[tuple[str, str, str], int]:
 
 
 def _get_existing_signoffs(batch: BatchState) -> dict[tuple[str, str, str], dict]:
-    """从最新签收报告中提取已签收的 (exam_id, room_id, subject) -> signoff_item 映射。"""
-    latest = batch.load_latest_signoff_report()
-    if not latest:
+    """从最新签收报告 + 有效状态中提取已签收的（包括已撤销的）。"""
+    effective = batch.get_effective_signoff_items()
+    if not effective:
         return {}
-    result = {}
-    for it in latest.signoff_items:
-        key = (it["exam_id"], it["room_id"], it["subject"])
-        result[key] = it
-    return result
+    return dict(effective)
 
 
 def import_signoff(
@@ -215,6 +223,40 @@ def import_signoff(
             },
         )
     else:
+        if force:
+            from datetime import datetime, timezone
+            for it in report.signoff_items:
+                key = (it["exam_id"], it["room_id"], it["subject"])
+                if key in existing_signoffs:
+                    old = existing_signoffs[key]
+                    version_before = batch.get_room_version(it["exam_id"], it["room_id"], it["subject"])
+                    version_after = batch.increment_room_version(it["exam_id"], it["room_id"], it["subject"])
+                    audit_entry = SignoffAuditEntry(
+                        audit_id=gen_signoff_audit_id(),
+                        batch_id=batch.batch_id,
+                        exam_id=it["exam_id"],
+                        room_id=it["room_id"],
+                        subject=it["subject"],
+                        action=SignoffAuditAction.IMPORT,
+                        operator="signoff_import",
+                        reason="force re-import",
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        version_before=version_before,
+                        version_after=version_after,
+                        old_values={
+                            "signoff_person": old.get("signoff_person"),
+                            "signoff_time": old.get("signoff_time"),
+                            "received_count": old.get("received_count"),
+                            "revoked": old.get("revoked", False),
+                        },
+                        new_values={
+                            "signoff_person": it["signoff_person"],
+                            "signoff_time": it["signoff_time"],
+                            "received_count": it["received_count"],
+                            "revoked": False,
+                        },
+                    )
+                    batch.append_signoff_audit(audit_entry)
         batch.save_signoff_report(report)
 
     return report, error
@@ -245,15 +287,293 @@ def build_signoff_summary(batch: BatchState) -> dict:
 
     status = "partial" if len(signed_keys) < total_expected else "complete" if total_expected > 0 else "none"
 
+    audit_log = batch.load_signoff_audit_log()
+    audit_count = len(audit_log)
+    corrected_count = sum(1 for a in audit_log if a.action == SignoffAuditAction.CORRECT)
+    revoked_count = sum(1 for a in audit_log if a.action == SignoffAuditAction.REVOKE)
+
+    effective_items = batch.get_effective_signoff_items()
+    active_signed_keys: set[tuple[str, str, str]] = set()
+    active_abnormal = 0
+    for k, v in effective_items.items():
+        if not v.get("revoked", False):
+            active_signed_keys.add(k)
+            if v.get("is_abnormal"):
+                active_abnormal += 1
+
+    active_status = (
+        "partial" if len(active_signed_keys) < total_expected
+        else "complete" if total_expected > 0
+        else "none"
+    )
+
+    room_versions = batch.load_room_versions()
+
     return {
         "has_signoff": True,
         "count": len(signoff_ids),
         "signoff_ids": signoff_ids,
         "index": batch.load_signoff_index(),
-        "status": status,
-        "signed_rooms": len(signed_keys),
+        "status": active_status,
+        "signed_rooms": len(active_signed_keys),
         "total_expected": total_expected,
-        "abnormal_count": abnormal_total,
+        "abnormal_count": active_abnormal,
         "last_imported_at": latest.imported_at if latest else None,
         "last_signoff_id": signoff_ids[-1],
+        "audit_count": audit_count,
+        "corrected_count": corrected_count,
+        "revoked_count": revoked_count,
+        "room_versions": room_versions,
     }
+
+
+def correct_signoff(
+    batch: BatchState,
+    exam_id: str,
+    room_id: str,
+    subject: str,
+    updates: dict,
+    operator: str,
+    reason: str,
+) -> tuple[dict, Optional[SignoffError]]:
+    """更正单个考场的签收记录。
+
+    校验规则：
+    1. 批次必须已完成发放
+    2. 考场必须属于该批次
+    3. 考场必须已签收且未被撤销
+    4. 更正字段必须是允许的字段
+    5. reason 必填
+    6. received_count 需与预检人数匹配（除非用户明确提供）
+    """
+    if batch.status != BatchStatus.COMPLETED:
+        return {}, SignoffError(
+            f"批次 {batch.batch_id} 状态为 {batch.status.value}，必须先完成发放才能更正签收",
+            exit_code=ExitCode.SIGNOFF_BATCH_NOT_DISPATCHED,
+            details={"batch_status": batch.status.value},
+        )
+
+    if not reason or not reason.strip():
+        return {}, SignoffError(
+            "更正签收必须提供原因 (--reason)",
+            exit_code=ExitCode.SIGNOFF_AUDIT_MISSING_REASON,
+        )
+
+    batch_rooms = _get_batch_rooms(batch)
+    key = (exam_id, room_id, subject)
+    if key not in batch_rooms:
+        return {}, SignoffError(
+            f"考场 {room_id}/{subject} 不属于批次 {batch.batch_id}",
+            exit_code=ExitCode.SIGNOFF_CORRECT_ROOM_NOT_FOUND,
+            details={"exam_id": exam_id, "room_id": room_id, "subject": subject},
+        )
+
+    effective = batch.get_effective_signoff_items()
+    if key not in effective:
+        return {}, SignoffError(
+            f"考场 {room_id}/{subject} 尚未签收，无法更正",
+            exit_code=ExitCode.SIGNOFF_CORRECT_NOT_SIGNED,
+            details={"exam_id": exam_id, "room_id": room_id, "subject": subject},
+        )
+
+    current = effective[key]
+    if current.get("revoked", False):
+        return {}, SignoffError(
+            f"考场 {room_id}/{subject} 的签收已被撤销，无法更正，请先重新导入",
+            exit_code=ExitCode.SIGNOFF_CORRECT_NOT_SIGNED,
+            details={"exam_id": exam_id, "room_id": room_id, "subject": subject, "revoked": True},
+        )
+
+    invalid_fields = set(updates.keys()) - CORRECTABLE_FIELDS
+    if invalid_fields:
+        return {}, SignoffError(
+            f"更正字段非法: {', '.join(sorted(invalid_fields))}。允许字段: {', '.join(sorted(CORRECTABLE_FIELDS))}",
+            exit_code=ExitCode.SIGNOFF_CORRECT_INVALID_FIELD,
+            details={"invalid_fields": sorted(invalid_fields), "allowed_fields": sorted(CORRECTABLE_FIELDS)},
+        )
+
+    if not updates:
+        return {}, SignoffError(
+            "更正内容为空，至少指定一个更正字段",
+            exit_code=ExitCode.SIGNOFF_CORRECT_INVALID_FIELD,
+        )
+
+    if "received_count" in updates:
+        try:
+            updates["received_count"] = int(updates["received_count"])
+        except (ValueError, TypeError):
+            return {}, SignoffError(
+                f"received_count 必须是整数，收到: {updates['received_count']}",
+                exit_code=ExitCode.SIGNOFF_CORRECT_INVALID_FIELD,
+            )
+
+    old_values: dict = {}
+    new_values: dict = {}
+    for field, new_val in updates.items():
+        old_val = current.get(field, "")
+        if old_val != new_val:
+            old_values[field] = old_val
+            new_values[field] = new_val
+
+    if not old_values:
+        return {
+            "changed": False,
+            "message": "所有字段值与当前值相同，无需更正",
+            "current": current,
+        }, None
+
+    version_before = batch.get_room_version(exam_id, room_id, subject)
+    version_after = batch.increment_room_version(exam_id, room_id, subject)
+
+    audit_entry = SignoffAuditEntry(
+        audit_id=gen_signoff_audit_id(),
+        batch_id=batch.batch_id,
+        exam_id=exam_id,
+        room_id=room_id,
+        subject=subject,
+        action=SignoffAuditAction.CORRECT,
+        operator=operator,
+        reason=reason.strip(),
+        version_before=version_before,
+        version_after=version_after,
+        old_values=old_values,
+        new_values=new_values,
+    )
+    batch.append_signoff_audit(audit_entry)
+    batch.save()
+
+    updated = dict(current)
+    for field, new_val in new_values.items():
+        updated[field] = new_val
+    updated["version"] = version_after
+    updated["last_updated"] = audit_entry.timestamp
+    updated["last_operator"] = operator
+
+    return {
+        "changed": True,
+        "audit_id": audit_entry.audit_id,
+        "version_before": version_before,
+        "version_after": version_after,
+        "old_values": old_values,
+        "new_values": new_values,
+        "current": updated,
+    }, None
+
+
+def revoke_signoff(
+    batch: BatchState,
+    exam_id: str,
+    room_id: str,
+    subject: str,
+    operator: str,
+    reason: str,
+) -> tuple[dict, Optional[SignoffError]]:
+    """撤销单个考场的签收记录（不影响批次发放状态）。
+
+    校验规则：
+    1. 批次必须已完成发放
+    2. 考场必须属于该批次
+    3. 考场必须已签收且未被撤销
+    4. reason 必填
+    """
+    if batch.status != BatchStatus.COMPLETED:
+        return {}, SignoffError(
+            f"批次 {batch.batch_id} 状态为 {batch.status.value}，必须先完成发放才能撤销签收",
+            exit_code=ExitCode.SIGNOFF_BATCH_NOT_DISPATCHED,
+            details={"batch_status": batch.status.value},
+        )
+
+    if not reason or not reason.strip():
+        return {}, SignoffError(
+            "撤销签收必须提供原因 (--reason)",
+            exit_code=ExitCode.SIGNOFF_AUDIT_MISSING_REASON,
+        )
+
+    batch_rooms = _get_batch_rooms(batch)
+    key = (exam_id, room_id, subject)
+    if key not in batch_rooms:
+        return {}, SignoffError(
+            f"考场 {room_id}/{subject} 不属于批次 {batch.batch_id}",
+            exit_code=ExitCode.SIGNOFF_REVOKE_ROOM_NOT_FOUND,
+            details={"exam_id": exam_id, "room_id": room_id, "subject": subject},
+        )
+
+    effective = batch.get_effective_signoff_items()
+    if key not in effective:
+        return {}, SignoffError(
+            f"考场 {room_id}/{subject} 尚未签收，无法撤销",
+            exit_code=ExitCode.SIGNOFF_REVOKE_NOT_SIGNED,
+            details={"exam_id": exam_id, "room_id": room_id, "subject": subject},
+        )
+
+    current = effective[key]
+    if current.get("revoked", False):
+        return {}, SignoffError(
+            f"考场 {room_id}/{subject} 的签收已经撤销",
+            exit_code=ExitCode.SIGNOFF_REVOKE_NOT_SIGNED,
+            details={"exam_id": exam_id, "room_id": room_id, "subject": subject, "already_revoked": True},
+        )
+
+    version_before = batch.get_room_version(exam_id, room_id, subject)
+    version_after = batch.increment_room_version(exam_id, room_id, subject)
+
+    audit_entry = SignoffAuditEntry(
+        audit_id=gen_signoff_audit_id(),
+        batch_id=batch.batch_id,
+        exam_id=exam_id,
+        room_id=room_id,
+        subject=subject,
+        action=SignoffAuditAction.REVOKE,
+        operator=operator,
+        reason=reason.strip(),
+        version_before=version_before,
+        version_after=version_after,
+        old_values={"signed": True, "revoked": False},
+        new_values={"signed": False, "revoked": True},
+    )
+    batch.append_signoff_audit(audit_entry)
+    batch.save()
+
+    return {
+        "revoked": True,
+        "audit_id": audit_entry.audit_id,
+        "version_before": version_before,
+        "version_after": version_after,
+        "room_id": room_id,
+        "subject": subject,
+        "exam_id": exam_id,
+        "revoked_at": audit_entry.timestamp,
+        "revoked_by": operator,
+        "revoke_reason": reason.strip(),
+    }, None
+
+
+def get_signoff_history(
+    batch: BatchState,
+    exam_id: Optional[str] = None,
+    room_id: Optional[str] = None,
+    subject: Optional[str] = None,
+) -> list[dict]:
+    """查询签收历史。
+
+    可按 exam_id/room_id/subject 过滤，返回每个考场的完整历史（导入记录 + 审计记录 + 当前状态）。
+    """
+    effective = batch.get_effective_signoff_items()
+    all_keys: set[tuple[str, str, str]] = set(effective.keys())
+
+    audit_log = batch.load_signoff_audit_log()
+    for entry in audit_log:
+        all_keys.add((entry.exam_id, entry.room_id, entry.subject))
+
+    if exam_id:
+        all_keys = {k for k in all_keys if k[0] == exam_id}
+    if room_id:
+        all_keys = {k for k in all_keys if k[1] == room_id}
+    if subject:
+        all_keys = {k for k in all_keys if k[2] == subject}
+
+    results = []
+    for key in sorted(all_keys):
+        e, r, s = key
+        results.append(batch.get_signoff_room_history(e, r, s))
+    return results
